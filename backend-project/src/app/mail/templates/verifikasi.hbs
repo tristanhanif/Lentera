@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Verifikasi Email - Lentera Sosmed</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+      background: linear-gradient(135deg, #1d4ed8 0%, #2563eb 100%);
+      min-height: 100vh;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      padding: 20px;
+    }
+
+    .wrapper {
+      width: 100%;
+      max-width: 550px;
+    }
+
+    .container {
+      background: #ffffff;
+      border-radius: 20px;
+      box-shadow: 0 20px 60px rgba(29, 78, 216, 0.4);
+      overflow: hidden;
+    }
+
+    .header {
+      background: linear-gradient(135deg, #1d4ed8 0%, #3b82f6 100%);
+      padding: 50px 30px;
+      text-align: center;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .header::before {
+      content: '';
+      position: absolute;
+      top: -50%;
+      right: -10%;
+      width: 300px;
+      height: 300px;
+      background: rgba(255, 255, 255, 0.1);
+      border-radius: 50%;
+    }
+
+    .header-icon {
+      font-size: 60px;
+      margin-bottom: 15px;
+      display: inline-block;
+    }
+
+    .header h1 {
+      font-size: 32px;
+      font-weight: 700;
+      color: #ffffff;
+      margin: 0;
+      letter-spacing: -0.5px;
+    }
+
+    .header-subtitle {
+      font-size: 14px;
+      color: rgba(255, 255, 255, 0.9);
+      margin-top: 8px;
+      font-weight: 500;
+    }
+
+    .content {
+      padding: 40px 35px;
+    }
+
+    .greeting {
+      font-size: 18px;
+      color: #1a202c;
+      margin-bottom: 24px;
+      font-weight: 600;
+      line-height: 1.6;
+    }
+
+    .greeting strong {
+      color: #1d4ed8;
+      font-weight: 700;
+    }
+
+    .message {
+      font-size: 15px;
+      color: #4a5568;
+      margin: 16px 0;
+      line-height: 1.8;
+    }
+
+    .cta-button {
+      display: block;
+      width: 100%;
+      padding: 18px 30px;
+      background-color: #2563eb;
+      color: #ffffff;
+      text-decoration: none;
+      border-radius: 12px;
+      font-weight: 700;
+      font-size: 17px;
+      text-align: center;
+      margin: 32px 0;
+      box-shadow: 0 4px 15px rgba(37, 99, 235, 0.45);
+    }
+
+    .cta-hint {
+      font-size: 13px;
+      color: #718096;
+      text-align: center;
+      margin-top: -18px;
+      margin-bottom: 24px;
+    }
+
+    .secondary-text {
+      font-size: 13px;
+      color: #718096;
+      margin: 24px 0 12px;
+      font-weight: 500;
+      text-align: center;
+    }
+
+    .link-box {
+      background-color: #f7fafc;
+      border: 1px dashed #cbd5e0;
+      border-radius: 8px;
+      padding: 12px;
+      word-break: break-all;
+      font-size: 12px;
+      color: #4a5568;
+      font-family: 'Courier New', monospace;
+      line-height: 1.6;
+      max-height: 70px;
+      overflow-y: auto;
+    }
+
+    .info-box {
+      background: #eff6ff;
+      border-left: 4px solid #2563eb;
+      border-radius: 8px;
+      padding: 16px;
+      margin: 28px 0;
+      font-size: 13px;
+      color: #1e40af;
+      line-height: 1.7;
+    }
+
+    .footer {
+      background-color: #f7fafc;
+      padding: 24px 35px;
+      text-align: center;
+      border-top: 1px solid #e2e8f0;
+    }
+
+    .footer-text {
+      font-size: 13px;
+      color: #718096;
+      line-height: 1.8;
+    }
+
+    .footer-brand {
+      font-size: 11px;
+      color: #a0aec0;
+      margin-top: 12px;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrapper">
+    <div class="container">
+
+      <!-- Header -->
+      <div class="header">
+        <div class="header-icon">📧</div>
+        <h1>Verifikasi Email</h1>
+        <p class="header-subtitle">Satu langkah lagi sebelum akun Anda resmi aktif</p>
+      </div>
+
+      <!-- Content -->
+      <div class="content">
+        <div class="greeting">
+          Halo <strong>{{ name }}</strong> 👋
+        </div>
+
+        <div class="message">
+          Selamat datang di <strong>Lentera Sosmed</strong>! Akun Anda baru saja dibuat.
+          Untuk mengaktifkan akun dan masuk ke Beranda Lentera, silakan klik kotak biru di bawah ini:
+        </div>
+
+        <!-- CTA Kotak Biru -->
+        <a href="{{ link }}" class="cta-button">
+          ✅ Verifikasi Email Saya
+        </a>
+        <div class="cta-hint">
+          Klik tombol ini untuk langsung masuk ke Beranda Lentera
+        </div>
+
+        <div class="secondary-text">
+          Atau salin dan tempel link berikut ke browser Anda:
+        </div>
+        <div class="link-box">{{ link }}</div>
+
+        <div class="info-box">
+          ℹ️ Akun Anda belum resmi terdaftar di Lentera Sosmed sampai email ini diverifikasi.<br>
+          Jika Anda tidak merasa membuat akun, abaikan email ini.
+        </div>
+      </div>
+
+      <!-- Footer -->
+      <div class="footer">
+        <p class="footer-text">
+          Demi keamanan akun Anda, jangan bagikan link ini kepada siapa pun.
+        </p>
+        <p class="footer-brand">
+          © 2026 <strong>Lentera Sosmed</strong> — All rights reserved
+        </p>
+      </div>
+
+    </div>
+  </div>
+</body>
+</html>

@@ -1,0 +1,28 @@
+services:
+  db:
+    image: mysql:8.0
+    container_name: lentera-mysql
+    restart: unless-stopped
+    # Samakan dengan backend-project/.env:
+    # DB_HOST=localhost, DB_PORT=3306, DB_USERNAME=root,
+    # DB_PASSWORD=rootpasswordku, DB_DATABASE=lentera
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpasswordku
+      MYSQL_DATABASE: lentera
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    command: >
+      --default-authentication-plugin=mysql_native_password
+      --character-set-server=utf8mb4
+      --collation-server=utf8mb4_unicode_ci
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-prootpasswordku"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+volumes:
+  mysql_data:
