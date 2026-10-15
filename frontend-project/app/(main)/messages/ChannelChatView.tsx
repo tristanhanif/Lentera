@@ -12,11 +12,17 @@ import {
   VStack,
 } from "@chakra-ui/react";
 import {
+  ChevronDown,
+  Copy,
   EllipsisVertical,
+  Forward,
+  Link2,
   LogOut,
   Mic,
   Pause,
   Play,
+  Plus,
+  Search,
   Send,
   Trash2,
 } from "lucide-react";
@@ -25,7 +31,9 @@ import { AnimatePresence, motion } from "framer-motion";
 import {
   channelAvatar,
   formatVoiceDuration,
+  useReactChannelMessage,
   type BackendChannelMessage,
+  type ChannelMessageReactionGroup,
 } from "./channel.service";
 
 const MotionBox = motion(Box);
@@ -44,6 +52,7 @@ interface ChannelChatViewProps {
   channel: ChannelInfo;
   messages: BackendChannelMessage[];
   isOwner: boolean;
+  isPreview?: boolean;
   unreadCount?: number;
   firstUnreadId?: string | null;
   onRead?: () => void;
@@ -51,6 +60,8 @@ interface ChannelChatViewProps {
   onSendVoice: (blob: Blob, duration: number) => void;
   sendingVoice?: boolean;
   onUnfollow: () => void;
+  onJoin?: () => void;
+  joining?: boolean;
 }
 
 // Cache puncak waveform per URL biar tidak decode ulang.
@@ -105,24 +116,576 @@ function pickMime(): string {
   return "";
 }
 
-// ===== Bubble VN: play/pause hijau + titik hijau menyatu gelombang =====
+// Waktu backend disimpan UTC (datetime tanpa offset) -> tampil WIB "22:30".
+// Sama seperti chat DM di messages/page.tsx.
+const parseChannelTime = (dateStr: string) => {
+  if (/[Zz]$/.test(dateStr) || /[+-]\d{2}:?\d{2}$/.test(dateStr)) {
+    return new Date(dateStr);
+  }
+  return new Date(dateStr.replace(" ", "T") + "Z");
+};
+
+const formatChannelHM = (dateStr: string) => {
+  try {
+    const d = parseChannelTime(dateStr);
+    const parts = new Intl.DateTimeFormat("id-ID", {
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+      timeZone: "Asia/Jakarta",
+    }).formatToParts(d);
+    const hh = parts.find((p) => p.type === "hour")?.value ?? "00";
+    const mm = parts.find((p) => p.type === "minute")?.value ?? "00";
+    return `${hh}:${mm}`;
+  } catch {
+    return dateStr.slice(11, 16);
+  }
+};
+
+// ===== Reaksi cepat bubble VN (POV pengikut): 6 emoji + panel full =====
+const QUICK_EMOJIS = ["👍", "❤️", "😂", "😮", "😢", "🙏"];
+
+const ALL_EMOJIS: { e: string; k: string }[] = [
+  { e: "😀", k: "senyum smile grin" },
+  { e: "😁", k: "grin gigi teeth smile" },
+  { e: "😂", k: "tertawa laugh lol ngakak" },
+  { e: "🤣", k: "ngakak laugh lol" },
+  { e: "😊", k: "senyum malu smile" },
+  { e: "😍", k: "cinta love mata heart eyes" },
+  { e: "😘", k: "cium kiss" },
+  { e: "🥰", k: "sayang love smile" },
+  { e: "😎", k: "keren cool gaya" },
+  { e: "🤔", k: "mikir think bingung" },
+  { e: "😐", k: "datar flat neutral" },
+  { e: "🙄", k: "sinis malas" },
+  { e: "😴", k: "tidur sleep ngantuk" },
+  { e: "😷", k: "sakit masker mask" },
+  { e: "🤯", k: "kaget mindblown" },
+  { e: "🥳", k: "pesta party ulang tahun" },
+  { e: "😭", k: "nangis cry sedih" },
+  { e: "😡", k: "marah angry kesal" },
+  { e: "😮", k: "kaget wow surprised" },
+  { e: "😢", k: "sedih sad air mata tear" },
+  { e: "😜", k: "lidah tongue becanda" },
+  { e: "👍", k: "jempol like setuju thumbs up" },
+  { e: "👎", k: "tidak dislike jelek" },
+  { e: "🙏", k: "doa pray terima kasih thanks" },
+  { e: "👏", k: "tepuk applause tangan" },
+  { e: "💪", k: "otot strong kuat" },
+  { e: "✌️", k: "peace damai" },
+  { e: "👀", k: "lihat eyes mata" },
+  { e: "🙌", k: "hore hurray senang" },
+  { e: "🤝", k: "salaman deal handshake" },
+  { e: "👌", k: "ok oke mantap" },
+  { e: "🫶", k: "hati hands love" },
+  { e: "🔥", k: "api fire keren" },
+  { e: "⭐", k: "bintang star" },
+  { e: "✨", k: "kilau sparkle bersinar" },
+  { e: "💯", k: "seratus 100 nilai" },
+  { e: "🎉", k: "pesta party selamat" },
+  { e: "❤️", k: "hati love merah red" },
+  { e: "💙", k: "hati biru blue love" },
+  { e: "💔", k: "patah hati broken" },
+  { e: "🎂", k: "kue cake ulang tahun birthday" },
+  { e: "🍕", k: "pizza makan" },
+  { e: "☕", k: "kopi coffee minum" },
+  { e: "🍜", k: "mie noodle makan" },
+  { e: "🚀", k: "roket rocket cepat" },
+  { e: "✈️", k: "pesawat plane liburan travel" },
+  { e: "🏠", k: "rumah home" },
+  { e: "⚽", k: "bola soccer sepak" },
+  { e: "🎮", k: "game main" },
+  { e: "🎵", k: "musik music lagu" },
+  { e: "📢", k: "pengumuman announce info" },
+  { e: "💡", k: "lampu ide idea" },
+  { e: "✅", k: "centang check benar" },
+  { e: "❌", k: "silang cross salah" },
+  { e: "⏰", k: "jam alarm clock waktu" },
+  { e: "🎁", k: "kado gift hadiah" },
+];
+
+// ===== Menu hover bubble chat (POV pengikut): chevron -> kotak emoji + menu =====
+// Dipakai bareng bubble VN dan bubble teks.
+// Kotak 1 (emoji) sudah fungsi: pilih emoji -> reaksi ke bubble.
+function useChannelBubbleMenu(
+  withMenu: boolean,
+  linkText?: string | null,
+  chevronRight: string | number = 1,
+  onReact?: (emoji: string) => void,
+) {
+  const [hovered, setHovered] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [emojiOpen, setEmojiOpen] = useState(false);
+  const [emojiQuery, setEmojiQuery] = useState("");
+
+  const showChevron = withMenu && (hovered || menuOpen || emojiOpen);
+  const hasLink = !!linkText && /https?:\/\/\S+/i.test(linkText);
+  const q = emojiQuery.trim().toLowerCase();
+  const filteredEmojis = q
+    ? ALL_EMOJIS.filter((item) => item.k.includes(q))
+    : ALL_EMOJIS;
+
+  const closeAllMenus = () => {
+    setMenuOpen(false);
+    setEmojiOpen(false);
+    setEmojiQuery("");
+  };
+
+  const bubbleMenu = (
+    <>
+      {/* Chevron: muncul saat kursor di atas bubble */}
+      {showChevron && (
+        <Box
+          as="button"
+          aria-label="Opsi pesan"
+          position="absolute"
+          top={1}
+          right={chevronRight}
+          w="24px"
+          h="24px"
+          borderRadius="full"
+          display="flex"
+          alignItems="center"
+          justifyContent="center"
+          color="var(--app-muted)"
+          _hover={{ bg: "var(--app-hover)", color: "var(--app-text)" }}
+          onClick={() => {
+            if (emojiOpen) {
+              closeAllMenus();
+            } else {
+              setMenuOpen((v) => !v);
+            }
+          }}
+        >
+          <ChevronDown size={16} />
+        </Box>
+      )}
+
+      {/* Kotak 1: bar 6 emoji + plus, di atas bubble rata kanan */}
+      <AnimatePresence>
+        {menuOpen && !emojiOpen && (
+          <MotionBox
+            initial={{ opacity: 0, y: 8, scale: 0.95 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 8, scale: 0.95 }}
+            transition={{ duration: 0.16, ease: "easeOut" }}
+            position="absolute"
+            bottom="calc(100% + 8px)"
+            right={2}
+            zIndex={30}
+            bg="var(--app-card)"
+            border="1px solid"
+            borderColor="var(--app-border)"
+            borderRadius="full"
+            shadow="lg"
+            px={2}
+            py={1.5}
+          >
+            <HStack gap={0.5} align="center">
+              {QUICK_EMOJIS.map((em) => (
+                <Box
+                  key={em}
+                  as="button"
+                  aria-label={`Reaksi ${em}`}
+                  fontSize="20px"
+                  lineHeight={1}
+                  p={1}
+                  borderRadius="md"
+                  cursor="pointer"
+                  transition="transform 0.12s"
+                  _hover={{ bg: "var(--app-hover)", transform: "scale(1.25)" }}
+                  onClick={() => {
+                    onReact?.(em);
+                    closeAllMenus();
+                  }}
+                >
+                  {em}
+                </Box>
+              ))}
+              <Box
+                as="button"
+                aria-label="Semua emoji"
+                w="28px"
+                h="28px"
+                borderRadius="full"
+                display="flex"
+                alignItems="center"
+                justifyContent="center"
+                color="var(--app-muted)"
+                cursor="pointer"
+                _hover={{ bg: "var(--app-hover)", color: "var(--app-text)" }}
+                onClick={() => setEmojiOpen(true)}
+              >
+                <Plus size={18} />
+              </Box>
+            </HStack>
+          </MotionBox>
+        )}
+      </AnimatePresence>
+
+      {/* Kotak 2: menu di kanan bubble rata atas (tampilan saja) */}
+      <AnimatePresence>
+        {menuOpen && !emojiOpen && (
+          <>
+            <Box position="fixed" inset={0} zIndex={20} onClick={closeAllMenus} />
+            <MotionBox
+              initial={{ opacity: 0, x: -8, scale: 0.97 }}
+              animate={{ opacity: 1, x: 0, scale: 1 }}
+              exit={{ opacity: 0, x: -8, scale: 0.97 }}
+              transition={{ duration: 0.16, ease: "easeOut" }}
+              position="absolute"
+              right={2}
+              top={2}
+              zIndex={30}
+              bg="var(--app-card)"
+              border="1px solid"
+              borderColor="var(--app-border)"
+              borderRadius="xl"
+              shadow="lg"
+              minW="170px"
+              py={2}
+            >
+              <Flex px={4} py={2.5} gap={3} align="center" color="var(--app-text)" _hover={{ bg: "var(--app-hover)" }} transition="0.15s">
+                <Copy size={16} />
+                <Text fontSize="sm" fontWeight="medium">Copy</Text>
+              </Flex>
+              <Flex px={4} py={2.5} gap={3} align="center" color="var(--app-text)" _hover={{ bg: "var(--app-hover)" }} transition="0.15s">
+                <Forward size={16} />
+                <Text fontSize="sm" fontWeight="medium">Forward</Text>
+              </Flex>
+              {hasLink && (
+                <Flex px={4} py={2.5} gap={3} align="center" color="var(--app-text)" _hover={{ bg: "var(--app-hover)" }} transition="0.15s">
+                  <Link2 size={16} />
+                  <Text fontSize="sm" fontWeight="medium">Copy Link</Text>
+                </Flex>
+              )}
+            </MotionBox>
+          </>
+        )}
+      </AnimatePresence>
+
+      {/* Panel emoji full: ganti kotak 1+2, di kanan menutup sebagian bubble */}
+      <AnimatePresence>
+        {emojiOpen && (
+          <>
+            <Box position="fixed" inset={0} zIndex={20} onClick={closeAllMenus} />
+            <MotionBox
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              transition={{ duration: 0.16, ease: "easeOut" }}
+              position="absolute"
+              top={2}
+              right={2}
+              zIndex={30}
+              w="280px"
+              maxW="85%"
+              bg="var(--app-card)"
+              border="1px solid"
+              borderColor="var(--app-border)"
+              borderRadius="xl"
+              shadow="xl"
+              p={3}
+            >
+              <HStack bg="var(--app-input)" border="1px solid" borderColor="var(--app-border)" borderRadius="lg" px={3} py={1} gap={2}>
+                <Box color="var(--app-faint)" display="flex" flexShrink={0}>
+                  <Search size={16} />
+                </Box>
+                <Input
+                  value={emojiQuery}
+                  onChange={(e) => setEmojiQuery(e.target.value)}
+                  placeholder="Cari emoji..."
+                  fontSize="sm"
+                  color="var(--app-text)"
+                  border="none"
+                  bg="transparent"
+                  p={0}
+                  h="34px"
+                  _placeholder={{ color: "var(--app-faint)" }}
+                  _focus={{ boxShadow: "none" }}
+                />
+              </HStack>
+              <Flex wrap="wrap" gap={1} mt={2} maxH="180px" overflowY="auto" css={{ "&::-webkit-scrollbar": { width: "4px" }, "&::-webkit-scrollbar-thumb": { background: "#cbd5e1", borderRadius: "10px" } }}>
+                {filteredEmojis.length === 0 ? (
+                  <Text fontSize="xs" color="var(--app-muted)" px={1} py={2}>
+                    Tidak ada emoji yang cocok
+                  </Text>
+                ) : (
+                  filteredEmojis.map((item) => (
+                    <Box
+                      key={item.e}
+                      as="button"
+                      aria-label={`Emoji ${item.e}`}
+                      fontSize="22px"
+                      lineHeight={1}
+                      p={1}
+                      borderRadius="md"
+                      cursor="pointer"
+                      transition="transform 0.12s"
+                      _hover={{ bg: "var(--app-hover)", transform: "scale(1.2)" }}
+                      onClick={() => {
+                        onReact?.(item.e);
+                        closeAllMenus();
+                      }}
+                    >
+                      {item.e}
+                    </Box>
+                  ))
+                )}
+              </Flex>
+            </MotionBox>
+          </>
+        )}
+      </AnimatePresence>
+    </>
+  );
+
+  return {
+    bubbleHoverProps: {
+      onMouseEnter: () => setHovered(true),
+      onMouseLeave: () => setHovered(false),
+    },
+    bubbleMenu,
+  };
+}
+
+// ===== Badge reaksi kecil di bawah-kiri bubble (majuan sedikit, tidak rata kiri) =====
+// - 1 emoji -> tampil 1, 2 beda -> tampil 2, dst. Maks 4 yang terbanyak.
+// - Kalau total > 4, 4 teratas + angka total di kanan (ala WA).
+function ReactionBadge({
+  reactions,
+  total,
+  onOpen,
+}: {
+  reactions: ChannelMessageReactionGroup[];
+  total: number;
+  onOpen: () => void;
+}) {
+  if (!total || !reactions.length) return null;
+  const top4 = reactions.slice(0, 4);
+  const showCount = total > 4;
+  return (
+    <Box
+      as="button"
+      aria-label={`Lihat ${total} reaksi`}
+      position="absolute"
+      bottom="-12px"
+      left="12px"
+      zIndex={5}
+      bg="var(--app-card)"
+      border="1px solid"
+      borderColor="var(--app-border)"
+      borderRadius="full"
+      shadow="sm"
+      px={2}
+      py={0.5}
+      display="flex"
+      alignItems="center"
+      gap={1}
+      cursor="pointer"
+      _hover={{ bg: "var(--app-hover)" }}
+      onClick={(e) => {
+        e.stopPropagation();
+        onOpen();
+      }}
+    >
+      <Flex align="center" gap="1px">
+        {top4.map((g) => (
+          <Text key={g.emoji} fontSize="14px" lineHeight={1}>
+            {g.emoji}
+          </Text>
+        ))}
+      </Flex>
+      {showCount && (
+        <Text fontSize="xs" fontWeight="bold" color="var(--app-text)">
+          {total}
+        </Text>
+      )}
+    </Box>
+  );
+}
+
+// ===== Popup "[angka] Reaksi": di atas-kiri bubble, 5 buletan per baris =====
+// Urutan kiri -> kanan, atas -> bawah = terbanyak dulu (sudah sort backend).
+function ReactionsDetail({
+  total,
+  reactions,
+  myEmoji,
+  onClose,
+}: {
+  total: number;
+  reactions: ChannelMessageReactionGroup[];
+  myEmoji?: string | null;
+  onClose: () => void;
+}) {
+  return (
+    <>
+      <Box position="fixed" inset={0} zIndex={40} onClick={onClose} />
+      <MotionBox
+        initial={{ opacity: 0, y: 8, scale: 0.97 }}
+        animate={{ opacity: 1, y: 0, scale: 1 }}
+        exit={{ opacity: 0, y: 8, scale: 0.97 }}
+        transition={{ duration: 0.16, ease: "easeOut" }}
+        position="absolute"
+        bottom="calc(100% + 8px)"
+        left="12px"
+        zIndex={50}
+        bg="var(--app-card)"
+        border="1px solid"
+        borderColor="var(--app-border)"
+        borderRadius="xl"
+        shadow="xl"
+        p={3}
+        w="280px"
+        maxW="85%"
+      >
+        <Text fontSize="sm" fontWeight="bold" color="var(--app-text)">
+          {total} Reaksi
+        </Text>
+        <Box
+          display="grid"
+          gridTemplateColumns="repeat(5, 1fr)"
+          gap={2}
+          mt={2}
+          maxH="200px"
+          overflowY="auto"
+          css={{ "&::-webkit-scrollbar": { width: "4px" }, "&::-webkit-scrollbar-thumb": { background: "#cbd5e1", borderRadius: "10px" } }}
+        >
+          {reactions.map((g) => {
+            const isMine = myEmoji === g.emoji;
+            return (
+              <HStack
+                key={g.emoji}
+                gap={1}
+                align="center"
+                justify="center"
+                border="1px solid"
+                borderColor={isMine ? "blue.500" : "var(--app-border)"}
+                bg={isMine ? "blue.50" : "var(--app-subtle)"}
+                borderRadius="full"
+                px={2}
+                py={1}
+                minW={0}
+              >
+                <Text fontSize="md" lineHeight={1} flexShrink={0}>
+                  {g.emoji}
+                </Text>
+                <Text fontSize="xs" fontWeight="bold" color="var(--app-text)">
+                  {g.count}
+                </Text>
+              </HStack>
+            );
+          })}
+        </Box>
+      </MotionBox>
+    </>
+  );
+}
+
+// ===== Bubble teks: chevron kanan atas + menu yang sama (POV pengikut) =====
+function TextBubble({
+  text,
+  createdAt,
+  withMenu,
+  reactions,
+  totalReactions,
+  myEmoji,
+  onReact,
+}: {
+  text: string;
+  createdAt: string;
+  withMenu: boolean;
+  reactions?: ChannelMessageReactionGroup[];
+  totalReactions?: number;
+  myEmoji?: string | null;
+  onReact?: (emoji: string) => void;
+}) {
+  const { bubbleHoverProps, bubbleMenu } = useChannelBubbleMenu(withMenu, text, 1, onReact);
+  const [showDetail, setShowDetail] = useState(false);
+  const list = reactions ?? [];
+  const total = totalReactions ?? 0;
+  return (
+    <Box
+      w="400px"
+      maxW="80%"
+      px={4}
+      py={3}
+      borderRadius="2xl"
+      bg="white"
+      color="black"
+      shadow="sm"
+      border="2px solid"
+      borderColor="var(--app-border)"
+      position="relative"
+      {...bubbleHoverProps}
+    >
+      <Text fontSize="sm" color="black" whiteSpace="pre-wrap" wordBreak="break-word">
+        {text}
+      </Text>
+      {/* Jam pojok kanan bawah */}
+      <Flex justify="flex-end" mt={1}>
+        <Text fontSize="11px" color="#64748b">
+          {formatChannelHM(createdAt)}
+        </Text>
+      </Flex>
+      {bubbleMenu}
+      <ReactionBadge reactions={list} total={total} onOpen={() => setShowDetail(true)} />
+      <AnimatePresence>
+        {showDetail && (
+          <ReactionsDetail
+            total={total}
+            reactions={list}
+            myEmoji={myEmoji}
+            onClose={() => setShowDetail(false)}
+          />
+        )}
+      </AnimatePresence>
+    </Box>
+  );
+}
+
+// ===== Bubble VN: icon play/pause adaptif tema + gelombang biru + mic & avatar =====
 function VoiceBubble({
   url,
   duration,
   playing,
   onPlay,
   onPause,
+  avatarUrl,
+  avatarName,
+  createdAt,
+  withMenu,
+  linkText,
+  reactions,
+  totalReactions,
+  myEmoji,
+  onReact,
 }: {
   url: string;
   duration: number;
   playing: boolean;
   onPlay: () => void;
   onPause: () => void;
+  avatarUrl: string | null;
+  avatarName: string;
+  createdAt: string;
+  withMenu: boolean;
+  linkText?: string | null;
+  reactions?: ChannelMessageReactionGroup[];
+  totalReactions?: number;
+  myEmoji?: string | null;
+  onReact?: (emoji: string) => void;
 }) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [peaks, setPeaks] = useState<number[]>([]);
   const [progress, setProgress] = useState(0);
   const [elapsed, setElapsed] = useState(0);
+  const [showDetail, setShowDetail] = useState(false);
+  const list = reactions ?? [];
+  const reactionTotal = totalReactions ?? 0;
+  // Menu hover POV pengikut (chevron + kotak emoji + menu + panel).
+  // Chevron di kanan atas gelombang: 16 (padding) + 52 (blok mic+avatar) + 10 (gap).
+  const { bubbleHoverProps, bubbleMenu } = useChannelBubbleMenu(withMenu, linkText, "78px", onReact);
 
   useEffect(() => {
     let live = true;
@@ -159,8 +722,8 @@ function VoiceBubble({
 
   return (
     <Box
+      w="400px"
       maxW="80%"
-      minW="240px"
       px={4}
       py={3}
       borderRadius="2xl"
@@ -169,6 +732,8 @@ function VoiceBubble({
       shadow="sm"
       border="2px solid"
       borderColor="var(--app-border)"
+      position="relative"
+      {...bubbleHoverProps}
     >
       <audio
         ref={audioRef}
@@ -185,56 +750,83 @@ function VoiceBubble({
           onPause();
         }}
       />
-      <Flex align="center" gap={3}>
+      <Flex align="center" gap={2.5}>
+        {/* Play/pause: selalu hitam karena bubble selalu putih (samain bubble teks) */}
         <Box
           as="button"
           aria-label={playing ? "Jeda VN" : "Putar VN"}
-          w="40px"
-          h="40px"
-          borderRadius="full"
-          bg="green.500"
-          color="white"
+          color="black"
           display="flex"
           alignItems="center"
           justifyContent="center"
           cursor="pointer"
           flexShrink={0}
-          _hover={{ bg: "green.600" }}
           onClick={() => (playing ? onPause() : onPlay())}
         >
-          {playing ? <Pause size={18} /> : <Play size={18} />}
+          {playing ? <Pause size={22} /> : <Play size={22} />}
         </Box>
-        {/* Gelombang: bar yang sudah lewat hijau + titik hijau berjalan */}
-        <Box flex={1} minW={0} position="relative" h="36px">
-          <Flex align="center" gap="2px" h="full">
-            {(peaks.length ? peaks : Array.from({ length: 48 }, () => 0.4)).map((p, i, arr) => (
-              <Box
-                key={i}
-                w="3px"
-                borderRadius="full"
-                bg={i / arr.length <= pct ? "green.500" : "#cbd5e1"}
-                style={{ height: `${Math.round(p * 100)}%` }}
-                flexShrink={0}
-              />
-            ))}
+        {/* Gelombang + durasi: durasi rata kiri sejajar gelombang */}
+        <VStack flex={1} minW={0} align="stretch" gap={1}>
+          <Box position="relative" h="36px">
+            <Flex align="center" justify="center" gap="2px" h="full">
+              {(peaks.length ? peaks : Array.from({ length: 48 }, () => 0.4)).map((p, i, arr) => (
+                <Box
+                  key={i}
+                  w="3px"
+                  borderRadius="full"
+                  bg={i / arr.length <= pct ? "blue.500" : "#cbd5e1"}
+                  style={{ height: `${Math.round(p * 100)}%` }}
+                  flexShrink={0}
+                />
+              ))}
+            </Flex>
+            <Box
+              position="absolute"
+              top="50%"
+              w="10px"
+              h="10px"
+              borderRadius="full"
+              bg="blue.500"
+              transform="translate(-50%, -50%)"
+              style={{ left: `${Math.round(pct * 100)}%` }}
+            />
+          </Box>
+          {/* Durasi rata kiri + jam rata kanan, sejajar gelombang */}
+          {/* Selalu hitam / abu tua karena bubble selalu putih (samain bubble teks) */}
+          <Flex justify="space-between" align="center">
+            <Text fontSize="xs" color="black" fontWeight="medium" textAlign="left">
+              {playing && elapsed > 0.3
+                ? `${formatVoiceDuration(elapsed)} / ${formatVoiceDuration(total)}`
+                : formatVoiceDuration(total)}
+            </Text>
+            <Text fontSize="11px" color="#64748b">
+              {formatChannelHM(createdAt)}
+            </Text>
           </Flex>
-          <Box
-            position="absolute"
-            top="50%"
-            w="10px"
-            h="10px"
-            borderRadius="full"
-            bg="green.500"
-            transform="translate(-50%, -50%)"
-            style={{ left: `${Math.round(pct * 100)}%` }}
-          />
+        </VStack>
+        {/* Mic biru ditempel di kiri avatar + PP avatar dibesarkan */}
+        <Box position="relative" flexShrink={0} display="flex" alignItems="center" pl="8px">
+          <Box position="absolute" left={0} bottom={0} color="blue.500" zIndex={1} display="flex">
+            <Mic size={16} />
+          </Box>
+          <Box w="44px" h="44px" borderRadius="full" overflow="hidden" bg="var(--app-subtle)" border="1px solid" borderColor="var(--app-border)" flexShrink={0}>
+            <img src={channelAvatar(avatarUrl)} alt={avatarName} className={avatarUrl ? undefined : "channel-logo-default"} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+          </Box>
         </Box>
       </Flex>
-      <Text fontSize="xs" color="black" mt={1.5} fontWeight="medium">
-        {playing && elapsed > 0.3
-          ? `${formatVoiceDuration(elapsed)} / ${formatVoiceDuration(total)}`
-          : formatVoiceDuration(total)}
-      </Text>
+
+      {bubbleMenu}
+      <ReactionBadge reactions={list} total={reactionTotal} onOpen={() => setShowDetail(true)} />
+      <AnimatePresence>
+        {showDetail && (
+          <ReactionsDetail
+            total={reactionTotal}
+            reactions={list}
+            myEmoji={myEmoji}
+            onClose={() => setShowDetail(false)}
+          />
+        )}
+      </AnimatePresence>
     </Box>
   );
 }
@@ -503,6 +1095,7 @@ export default function ChannelChatView({
   channel,
   messages,
   isOwner,
+  isPreview = false,
   unreadCount = 0,
   firstUnreadId = null,
   onRead,
@@ -510,12 +1103,19 @@ export default function ChannelChatView({
   onSendVoice,
   sendingVoice = false,
   onUnfollow,
+  onJoin,
+  joining = false,
 }: ChannelChatViewProps) {
   const [text, setText] = useState("");
   const [menuOpen, setMenuOpen] = useState(false);
   const [recording, setRecording] = useState(false);
   const [playingId, setPlayingId] = useState<string | null>(null);
   const [confirmUnfollow, setConfirmUnfollow] = useState(false);
+  const reactMutation = useReactChannelMessage(channel.id);
+  const handleReact = (messageId: string, emoji: string) => {
+    if (isPreview || reactMutation.isPending) return;
+    reactMutation.mutate({ messageId, emoji });
+  };
 
   // ===== Unread ala WA (sama seperti komunitas) =====
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -616,7 +1216,7 @@ export default function ChannelChatView({
       <Flex p={4} bg="var(--app-card)" borderBottom="1px solid" borderColor="var(--app-hover)" justify="space-between" align="center" shadow="sm" position="relative" zIndex={10}>
         <HStack gap={3}>
           <Box w="48px" h="48px" borderRadius="full" overflow="hidden" bg="var(--app-subtle)" border="1px solid" borderColor="var(--app-border)" flexShrink={0}>
-            <img src={channelAvatar(channel.avatarUrl)} alt={channel.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+            <img src={channelAvatar(channel.avatarUrl)} alt={channel.name} className={channel.avatarUrl ? undefined : "channel-logo-default"} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
           </Box>
           <VStack align="start" gap={0}>
             <Text fontWeight="bold" color="var(--app-text)" fontSize="md" lineClamp={1}>
@@ -627,22 +1227,57 @@ export default function ChannelChatView({
             </Text>
           </VStack>
         </HStack>
-        <Box position="relative">
-          <IconButton aria-label="Menu saluran" variant="ghost" size="sm" borderRadius="full" color="var(--app-muted)" _hover={{ bg: "var(--app-subtle)", color: "var(--app-text)" }} onClick={() => setMenuOpen((v) => !v)}>
-            <EllipsisVertical size={20} />
-          </IconButton>
-          {menuOpen && <Box position="fixed" inset={0} zIndex={20} onClick={() => setMenuOpen(false)} />}
-          <AnimatePresence>
-            {menuOpen && (
-              <MotionBox initial={{ opacity: 0, y: -12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -12 }} transition={{ duration: 0.18, ease: "easeOut" }} position="absolute" top="calc(100% + 4px)" right={0} bg="var(--app-card)" borderRadius="xl" shadow="lg" border="1px solid" borderColor="var(--app-border)" minW="190px" py={2} zIndex={30}>
-                <Flex px={4} py={2.5} gap={3} align="center" justify="start" cursor="pointer" color="var(--app-text)" _hover={{ bg: "var(--app-hover)" }} transition="0.15s" onClick={() => { setMenuOpen(false); setConfirmUnfollow(true); }}>
-                  <Box display="flex" alignItems="center"><LogOut size={16} /></Box>
-                  <Text fontSize="sm" fontWeight="medium">{isOwner ? "Hapus saluran" : "Berhenti mengikuti"}</Text>
-                </Flex>
-              </MotionBox>
-            )}
-          </AnimatePresence>
-        </Box>
+        <HStack gap={2} align="center">
+          {/* Cara Join #1: kotak radius biru tulisan putih di header,
+              sebelah kiri icon titik-tiga (mode preview / liat-liat). */}
+          {isPreview && !isOwner && (
+            <Button
+              size="sm"
+              borderRadius="full"
+              bg="blue.600"
+              color="white"
+              fontWeight="bold"
+              px={5}
+              _hover={{ bg: "blue.700" }}
+              loading={joining}
+              onClick={() => onJoin?.()}
+            >
+              Join
+            </Button>
+          )}
+          <Box position="relative">
+            <IconButton aria-label="Menu saluran" variant="ghost" size="sm" borderRadius="full" color="var(--app-muted)" _hover={{ bg: "var(--app-subtle)", color: "var(--app-text)" }} onClick={() => setMenuOpen((v) => !v)}>
+              <EllipsisVertical size={20} />
+            </IconButton>
+            {menuOpen && <Box position="fixed" inset={0} zIndex={20} onClick={() => setMenuOpen(false)} />}
+            <AnimatePresence>
+              {menuOpen && (
+                <MotionBox initial={{ opacity: 0, y: -12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -12 }} transition={{ duration: 0.18, ease: "easeOut" }} position="absolute" top="calc(100% + 4px)" right={0} bg="var(--app-card)" borderRadius="xl" shadow="lg" border="1px solid" borderColor="var(--app-border)" minW="190px" py={2} zIndex={30}>
+                  {isPreview && !isOwner ? (
+                    <Box px={4} py={2} maxW="240px">
+                      <Text fontSize="sm" fontWeight="bold" color="var(--app-text)" mb={1}>
+                        {channel.name}
+                      </Text>
+                      {!!channel.description && (
+                        <Text fontSize="xs" color="var(--app-muted)" lineClamp={4}>
+                          {channel.description}
+                        </Text>
+                      )}
+                      <Text fontSize="xs" color="var(--app-muted)" mt={2}>
+                        Join dulu untuk opsi lainnya.
+                      </Text>
+                    </Box>
+                  ) : (
+                    <Flex px={4} py={2.5} gap={3} align="center" justify="start" cursor="pointer" color="var(--app-text)" _hover={{ bg: "var(--app-hover)" }} transition="0.15s" onClick={() => { setMenuOpen(false); setConfirmUnfollow(true); }}>
+                      <Box display="flex" alignItems="center"><LogOut size={16} /></Box>
+                      <Text fontSize="sm" fontWeight="medium">{isOwner ? "Hapus saluran" : "Berhenti mengikuti"}</Text>
+                    </Flex>
+                  )}
+                </MotionBox>
+              )}
+            </AnimatePresence>
+          </Box>
+        </HStack>
       </Flex>
 
       {/* Isi chat: bubble di tengah, tanpa avatar/nama */}
@@ -650,7 +1285,7 @@ export default function ChannelChatView({
         <Box mx="auto" w="full" maxW="300px" bg="var(--app-card)" border="1px solid" borderColor="var(--app-border)" borderRadius="2xl" shadow="sm" px={5} py={5}>
           <VStack gap={2} align="center" textAlign="center">
             <Box w="72px" h="72px" borderRadius="full" overflow="hidden" bg="var(--app-subtle)" border="1px solid" borderColor="var(--app-border)">
-              <img src={channelAvatar(channel.avatarUrl)} alt={channel.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+              <img src={channelAvatar(channel.avatarUrl)} alt={channel.name} className={channel.avatarUrl ? undefined : "channel-logo-default"} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
             </Box>
             <Text fontWeight="black" color="var(--app-text)" fontSize="md">
               Selamat datang di saluran {channel.name}!
@@ -658,6 +1293,22 @@ export default function ChannelChatView({
             <Text fontSize="xs" color="var(--app-muted)" maxW="240px">
               Hanya pembuat saluran yang dapat mengirim pesan.
             </Text>
+            {isPreview && !isOwner && (
+              <Button
+                size="sm"
+                borderRadius="full"
+                bg="blue.600"
+                color="white"
+                fontWeight="bold"
+                px={6}
+                mt={1}
+                _hover={{ bg: "blue.700" }}
+                loading={joining}
+                onClick={() => onJoin?.()}
+              >
+                Join
+              </Button>
+            )}
             <Box h="1px" w="full" bg="var(--app-border)" my={2} />
             <Text fontSize="sm" fontWeight="bold" color="var(--app-muted)">
               {channel.followerCount} followers
@@ -691,7 +1342,7 @@ export default function ChannelChatView({
                   </Box>
                 </Flex>
               )}
-              <Flex justify="center" id={`chmsg-${m.id}`}>
+              <Flex justify="center" id={`chmsg-${m.id}`} pb={(m.totalReactions ?? 0) > 0 ? 3 : 0}>
                 {m.kind === "voice" && m.audioUrl ? (
                   <VoiceBubble
                     url={m.audioUrl}
@@ -699,23 +1350,26 @@ export default function ChannelChatView({
                     playing={playingId === m.id}
                     onPlay={() => setPlayingId(m.id)}
                     onPause={() => setPlayingId((prev) => (prev === m.id ? null : prev))}
+                    avatarUrl={channel.avatarUrl}
+                    avatarName={channel.name}
+                    createdAt={m.createdAt}
+                    withMenu={!isOwner && !isPreview}
+                    linkText={m.text}
+                    reactions={m.reactions}
+                    totalReactions={m.totalReactions}
+                    myEmoji={m.myEmoji}
+                    onReact={(emoji) => handleReact(m.id, emoji)}
                   />
                 ) : (
-                  <Box
-                    maxW="80%"
-                    px={4}
-                    py={3}
-                    borderRadius="2xl"
-                    bg="white"
-                    color="black"
-                    shadow="sm"
-                    border="2px solid"
-                    borderColor="var(--app-border)"
-                  >
-                    <Text fontSize="sm" color="black" whiteSpace="pre-wrap" wordBreak="break-word">
-                      {m.text ?? ""}
-                    </Text>
-                  </Box>
+                  <TextBubble
+                    text={m.text ?? ""}
+                    createdAt={m.createdAt}
+                    withMenu={!isOwner && !isPreview}
+                    reactions={m.reactions}
+                    totalReactions={m.totalReactions}
+                    myEmoji={m.myEmoji}
+                    onReact={(emoji) => handleReact(m.id, emoji)}
+                  />
                 )}
               </Flex>
             </Fragment>
@@ -789,6 +1443,28 @@ export default function ChannelChatView({
               )}
             </HStack>
           )}
+        </Box>
+      ) : isPreview ? (
+        <Box p={4} flexShrink={0} bg="transparent">
+          <HStack bg="var(--app-card)" border="1px solid" borderColor="var(--app-border)" borderRadius="full" px={3} py={2} gap={2}>
+            <Text fontSize="xs" color="var(--app-muted)" flex={1} textAlign="center" lineClamp={1}>
+              Liat-liat dulu, Join kalau cocok.
+            </Text>
+            <Button
+              size="sm"
+              borderRadius="full"
+              bg="blue.600"
+              color="white"
+              fontWeight="bold"
+              px={5}
+              flexShrink={0}
+              _hover={{ bg: "blue.700" }}
+              loading={joining}
+              onClick={() => onJoin?.()}
+            >
+              Join
+            </Button>
+          </HStack>
         </Box>
       ) : (
         <Box p={4} flexShrink={0} bg="transparent">

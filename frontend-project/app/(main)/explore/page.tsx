@@ -344,14 +344,20 @@ function KomunitasPopulerCard() {
   );
 }
 
-// Saluran populer (real backend): publik, tombol Ikuti langsung gabung
-// ala WA lalu direct ke chat salurannya.
+// Saluran populer (real backend): publik ala WA.
+// - Pencet nama saluran -> preview isi chat dulu (tanpa langsung join),
+//   direct ke /messages?channel=:id.
+// - Pencet tombol Join -> langsung gabung lalu direct ke chat salurannya.
 function SaluranPopulerCard() {
   const router = useRouter();
   const { data, isLoading } = useExploreChannels();
   const followMutation = useFollowChannel();
   const [followingId, setFollowingId] = useState<string | null>(null);
   const list = (data?.data ?? []).slice(0, 6);
+
+  const handleOpenPreview = (c: ExploreChannel) => {
+    router.push(`/messages?channel=${encodeURIComponent(c.id)}`);
+  };
 
   const handleFollow = (c: ExploreChannel) => {
     if (c.isFollowing || c.isOwner) {
@@ -399,13 +405,24 @@ function SaluranPopulerCard() {
               <Box w="40px" h="40px" borderRadius="full" overflow="hidden" bg="var(--app-subtle)" border="1px solid" borderColor="var(--app-border)" flexShrink={0}>
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
-                  src={c.avatarUrl || "/icon-komunitas.png"}
+                  src={c.avatarUrl || "/icon-saluran.svg"}
                   alt={c.name}
+                  className={c.avatarUrl ? undefined : "channel-logo-default"}
                   style={{ width: "100%", height: "100%", objectFit: "cover" }}
                 />
               </Box>
               <VStack align="start" gap={0} flex={1} minW={0}>
-                <Text fontWeight="bold" fontSize="sm" color="var(--app-text)" truncate w="full">
+                <Text
+                  fontWeight="bold"
+                  fontSize="sm"
+                  color="var(--app-text)"
+                  truncate
+                  w="full"
+                  cursor="pointer"
+                  _hover={{ textDecoration: "underline" }}
+                  onClick={() => handleOpenPreview(c)}
+                  title={`Lihat saluran ${c.name}`}
+                >
                   {c.name}
                 </Text>
                 <Text fontSize="xs" color="var(--app-muted)" truncate w="full">
@@ -421,7 +438,7 @@ function SaluranPopulerCard() {
                 loading={followingId === c.id}
                 onClick={() => handleFollow(c)}
               >
-                {c.isFollowing || c.isOwner ? "Buka" : "Ikuti"}
+                {c.isFollowing || c.isOwner ? "Buka" : "Join"}
               </Button>
             </Flex>
           ))}

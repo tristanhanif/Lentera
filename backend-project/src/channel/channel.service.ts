@@ -5,8 +5,8 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { MoreThan, Repository } from 'typeorm';
-import { Channel, ChannelFollow, ChannelMessage } from '../app/entity/channel.entity';
+import { Repository } from 'typeorm';
+import { Channel, ChannelFollow, ChannelMessage, ChannelMessageReaction } from '../app/entity/channel.entity';
 import { User } from '../app/entity/user.entity';
 import { BlocksService } from '../blocks/blocks.service';
 
@@ -19,6 +19,8 @@ export class ChannelService {
     private readonly followRepo: Repository<ChannelFollow>,
     @InjectRepository(ChannelMessage)
     private readonly messageRepo: Repository<ChannelMessage>,
+    @InjectRepository(ChannelMessageReaction)
+    private readonly reactionRepo: Repository<ChannelMessageReaction>,
     @InjectRepository(User)
     private readonly userRepo: Repository<User>,
     private readonly blocksService: BlocksService,
@@ -61,6 +63,29 @@ export class ChannelService {
       .getCount();
   }
 
+  private async pruneOldMessages(channelId: string, keep = 200) {
+    const total = await this.messageRepo.count({ where: { channelId } });
+    if (total <= keep) return;
+    const excess = total - keep;
+    const old = await this.messageRepo.find({
+      where: { channelId },
+      order: { createdAt: 'ASC' },
+      take: excess,
+      select: ['id'],
+    });
+    if (old.length) {
+      const ids = old.map((o) => o.id);
+      try {
+        await this.reactionRepo
+          .createQueryBuilder()
+          .delete()
+          .where('messageId IN (:...ids)', { ids })
+          .execute();
+      } catch {}
+      await this.messageRepo.delete(ids);
+    }
+  }
+
   private mapMessage(msg: ChannelMessage, userId: string) {
     const isVoice = !!msg.audioUrl;
     return {
@@ -72,7 +97,40 @@ export class ChannelService {
       audioUrl: msg.audioUrl ?? null,
       duration: msg.duration ?? null,
       createdAt: msg.createdAt,
+      reactions: [] as { emoji: string; count: number }[],
+      totalReactions: 0,
+      myEmoji: null as string | null,
     };
+  }
+
+  private async attachReactions(
+    mapped: ReturnType<ChannelService['mapMessage']>[],
+    userId: string,
+  ) {
+    if (!mapped.length) return mapped;
+    const ids = mapped.map((m) => m.id);
+    const rows = await this.reactionRepo
+      .createQueryBuilder('r')
+      .where('r.messageId IN (:...ids)', { ids })
+      .getMany();
+    const byMsg = new Map<string, ChannelMessageReaction[]>();
+    for (const r of rows) {
+      const arr = byMsg.get(r.messageId) ?? [];
+      arr.push(r);
+      byMsg.set(r.messageId, arr);
+    }
+    for (const m of mapped) {
+      const list = byMsg.get(m.id) ?? [];
+      const counts = new Map<string, number>();
+      for (const r of list) counts.set(r.emoji, (counts.get(r.emoji) ?? 0) + 1);
+      const groups = [...counts.entries()]
+        .map(([emoji, count]) => ({ emoji, count }))
+        .sort((a, b) => b.count - a.count || a.emoji.localeCompare(b.emoji));
+      m.reactions = groups;
+      m.totalReactions = list.length;
+      m.myEmoji = list.find((r) => r.userId === userId)?.emoji ?? null;
+    }
+    return mapped;
   }
 
   async createChannel(
@@ -116,7 +174,7 @@ export class ChannelService {
         const [followerCount, lastMessage, unreadCount, owner] = await Promise.all([
           this.followRepo.count({ where: { channelId: c.id } }),
           this.messageRepo.findOne({
-            where: { channelId: c.id, createdAt: MoreThan(f.joinedAt) },
+            where: { channelId: c.id },
             order: { createdAt: 'DESC' },
           }),
           this.countUnread(c.id, userId, since),
@@ -160,13 +218,15 @@ export class ChannelService {
   }
 
   async getChannel(userId: string, channelId: string) {
-    const follow = await this.requireFollow(userId, channelId);
     const channel = await this.channelRepo.findOne({
       where: { id: channelId },
     });
     if (!channel) {
       throw new NotFoundException('Saluran tidak ditemukan');
     }
+    const follow = await this.followRepo.findOne({
+      where: { channelId, userId },
+    });
     const [followerCount, owner] = await Promise.all([
       this.followRepo.count({ where: { channelId } }),
       this.userRepo.findOne({
@@ -174,6 +234,15 @@ export class ChannelService {
         select: ['id', 'username', 'name', 'avatar'],
       }),
     ]);
+    const isOwner = channel.ownerId === userId;
+    const isFollowing = !!follow;
+    // Preview ala WA: non-follower boleh lihat detail (liat-liat dulu).
+    // Tetap tolak kalau ada blokir dua arah dengan pemilik.
+    if (!isFollowing) {
+      if (await this.blocksService.isBlockedEitherWay(userId, channel.ownerId)) {
+        throw new ForbiddenException('Tidak bisa melihat saluran ini');
+      }
+    }
     return {
       id: channel.id,
       name: channel.name,
@@ -186,8 +255,9 @@ export class ChannelService {
       createdAt: channel.createdAt,
       updatedAt: channel.updatedAt,
       followerCount,
-      joinedAt: follow.joinedAt,
-      isOwner: channel.ownerId === userId,
+      joinedAt: follow?.joinedAt ?? null,
+      isOwner,
+      isFollowing,
     };
   }
 
@@ -219,14 +289,49 @@ export class ChannelService {
   }
 
   async getMessages(userId: string, channelId: string) {
-    const follow = await this.requireFollow(userId, channelId);
+    const channel = await this.channelRepo.findOne({
+      where: { id: channelId },
+    });
+    if (!channel) {
+      throw new NotFoundException('Saluran tidak ditemukan');
+    }
+    const follow = await this.followRepo.findOne({
+      where: { channelId, userId },
+    });
+    // Preview ala WA: non-follower boleh liat-liat isi chat (tanpa unread).
+    if (!follow) {
+      if (await this.blocksService.isBlockedEitherWay(userId, channel.ownerId)) {
+        throw new ForbiddenException('Tidak bisa melihat saluran ini');
+      }
+      const messagesDesc = await this.messageRepo.find({
+        where: { channelId },
+        order: { createdAt: 'DESC' },
+        take: 200,
+      });
+      const messages = [...messagesDesc].reverse();
+      const mapped = messages.map((m) => this.mapMessage(m, userId));
+      await this.attachReactions(mapped, userId);
+      return {
+        messages: mapped,
+        joinedAt: null,
+        unreadCount: 0,
+        firstUnreadId: null,
+        isPreview: true,
+      };
+    }
     const since = this.lastSeenOf(follow);
-    const messages = await this.messageRepo.find({
-      where: { channelId, createdAt: MoreThan(follow.joinedAt) },
-      order: { createdAt: 'ASC' },
+    // Riwayat tetap tampil untuk anggota baru: ambil 200 TERBARU (DESC)
+    // tanpa filter joinedAt, lalu balik ke ASC untuk tampilan.
+    // Kalau total > 200, yang lama sudah dihapus saat kirim (prune);
+    // kalau riwayatnya sudah kehapus sistem, yang tampil kosong apa adanya.
+    const messagesDesc = await this.messageRepo.find({
+      where: { channelId },
+      order: { createdAt: 'DESC' },
       take: 200,
     });
+    const messages = [...messagesDesc].reverse();
     const mapped = messages.map((m) => this.mapMessage(m, userId));
+    await this.attachReactions(mapped, userId);
     const unreadIds = mapped
       .filter((m) => !m.isMine && new Date(m.createdAt) > new Date(since))
       .map((m) => m.id);
@@ -235,6 +340,7 @@ export class ChannelService {
       joinedAt: follow.joinedAt,
       unreadCount: unreadIds.length,
       firstUnreadId: unreadIds[0] ?? null,
+      isPreview: false,
     };
   }
 
@@ -259,6 +365,10 @@ export class ChannelService {
       duration: msg.duration ?? null,
     });
     await this.channelRepo.update({ id: channelId }, { updatedAt: new Date() });
+    // Retensi: maksimal 200 pesan per saluran. Kalau lebih, hapus yang paling lama.
+    try {
+      await this.pruneOldMessages(channelId, 200);
+    } catch {}
     // Pembuat otomatis dianggap sudah baca sampai pesannya sendiri.
     try {
       const own = await this.followRepo.findOne({ where: { channelId, userId } });
@@ -341,6 +451,83 @@ export class ChannelService {
     }
     await this.followRepo.delete({ channelId, userId });
     return { message: 'Berhenti mengikuti saluran' };
+  }
+
+  async reactToMessage(userId: string, channelId: string, messageId: string, emoji: string) {
+    const clean = (emoji || '').trim().slice(0, 16);
+    if (!clean) {
+      throw new BadRequestException('Emoji tidak boleh kosong');
+    }
+    // Hanya yang sudah Join yang bisa kasih reaksi (preview tidak bisa).
+    await this.requireFollow(userId, channelId);
+    const message = await this.messageRepo.findOne({
+      where: { id: messageId, channelId },
+    });
+    if (!message) {
+      throw new NotFoundException('Pesan tidak ditemukan');
+    }
+    const existing = await this.reactionRepo.findOne({
+      where: { messageId, userId },
+    });
+    if (existing) {
+      // Pencet emoji yang sama lagi = hapus reaksi (toggle ala WA).
+      if (existing.emoji === clean) {
+        await this.reactionRepo.remove(existing);
+      } else {
+        existing.emoji = clean;
+        await this.reactionRepo.save(existing);
+      }
+    } else {
+      await this.reactionRepo.save({
+        messageId,
+        channelId,
+        userId,
+        emoji: clean,
+      });
+    }
+    const rows = await this.reactionRepo.find({ where: { messageId } });
+    const counts = new Map<string, number>();
+    for (const r of rows) counts.set(r.emoji, (counts.get(r.emoji) ?? 0) + 1);
+    const groups = [...counts.entries()]
+      .map(([em, count]) => ({ emoji: em, count }))
+      .sort((a, b) => b.count - a.count || a.emoji.localeCompare(b.emoji));
+    return {
+      messageId,
+      reactions: groups,
+      totalReactions: rows.length,
+      myEmoji: rows.find((r) => r.userId === userId)?.emoji ?? null,
+    };
+  }
+
+  async getMessageReactions(userId: string, channelId: string, messageId: string) {
+    const channel = await this.channelRepo.findOne({ where: { id: channelId } });
+    if (!channel) {
+      throw new NotFoundException('Saluran tidak ditemukan');
+    }
+    const follow = await this.followRepo.findOne({ where: { channelId, userId } });
+    if (!follow) {
+      if (await this.blocksService.isBlockedEitherWay(userId, channel.ownerId)) {
+        throw new ForbiddenException('Tidak bisa melihat saluran ini');
+      }
+    }
+    const message = await this.messageRepo.findOne({
+      where: { id: messageId, channelId },
+    });
+    if (!message) {
+      throw new NotFoundException('Pesan tidak ditemukan');
+    }
+    const rows = await this.reactionRepo.find({ where: { messageId } });
+    const counts = new Map<string, number>();
+    for (const r of rows) counts.set(r.emoji, (counts.get(r.emoji) ?? 0) + 1);
+    const groups = [...counts.entries()]
+      .map(([em, count]) => ({ emoji: em, count }))
+      .sort((a, b) => b.count - a.count || a.emoji.localeCompare(b.emoji));
+    return {
+      messageId,
+      total: rows.length,
+      reactions: groups,
+      myEmoji: rows.find((r) => r.userId === userId)?.emoji ?? null,
+    };
   }
 
   async getExploreChannels(userId: string, limit = 20) {

@@ -96,9 +96,11 @@ import {
 import {
   channelAvatar,
   formatVoiceDuration,
+  useBackendChannelDetail,
   useBackendChannelMessages,
   useBackendChannels,
   useCreateBackendChannel,
+  useFollowChannel,
   useMarkChannelRead,
   useSendBackendChannelText,
   useSendBackendChannelVoice,
@@ -925,20 +927,63 @@ function MessagesPage() {
   const activeUnreadCount = backendMessagesData?.data?.unreadCount ?? 0;
   const activeFirstUnreadId = backendMessagesData?.data?.firstUnreadId ?? null;
   // Saluran backend (daftar + chat + unread ala komunitas).
+  // Preview ala WA: selectedChannelId bisa belum diikuti -> fallback ke
+  // detail publik (/channels/:id) + messages publik, lalu Join dari header.
   const { data: backendChannelsData } = useBackendChannels(!!currentUserId);
   const backendChannels = backendChannelsData?.data ?? [];
   const { data: backendChannelMessagesData } = useBackendChannelMessages(selectedChannelId);
+  const mySelectedChannel = backendChannels.find((c) => c.id === selectedChannelId) ?? null;
+  const needPreviewDetail = !!selectedChannelId && !mySelectedChannel;
+  const { data: previewChannelData, isLoading: loadingPreviewChannel } =
+    useBackendChannelDetail(needPreviewDetail ? selectedChannelId : null);
+  const previewChannel = previewChannelData?.data ?? null;
   const createBackendChannelMutation = useCreateBackendChannel();
   const sendChannelTextMutation = useSendBackendChannelText(selectedChannelId ?? "");
   const sendChannelVoiceMutation = useSendBackendChannelVoice(selectedChannelId ?? "");
   const markChannelReadMutation = useMarkChannelRead(selectedChannelId ?? "");
   const unfollowChannelMutation = useUnfollowChannel();
+  const followChannelMutation = useFollowChannel();
   const [sendingVoice, setSendingVoice] = useState(false);
+  const [joiningChannel, setJoiningChannel] = useState(false);
   const unreadChannelCount = backendChannels.filter((c) => (c.unreadCount ?? 0) > 0).length;
   const activeChannelUnreadCount = backendChannelMessagesData?.data?.unreadCount ?? 0;
   const activeChannelFirstUnreadId = backendChannelMessagesData?.data?.firstUnreadId ?? null;
-  const selectedChannel = backendChannels.find((c) => c.id === selectedChannelId) ?? null;
+  const selectedChannel = mySelectedChannel
+    ?? (previewChannel
+      ? {
+        id: previewChannel.id,
+        name: previewChannel.name,
+        description: previewChannel.description,
+        avatarUrl: previewChannel.avatarUrl,
+        ownerId: previewChannel.ownerId,
+        followerCount: previewChannel.followerCount,
+        isPreviewOwner: previewChannel.isOwner,
+      }
+      : null);
+  const selectedChannelIsOwner = mySelectedChannel
+    ? mySelectedChannel.ownerId === currentUserId
+    : (previewChannel?.isOwner ?? false);
+  // Preview = ada detail publik tapi belum join & bukan owner.
+  const selectedChannelIsPreview = !!selectedChannelId
+    && !mySelectedChannel
+    && !!previewChannel
+    && !previewChannel.isFollowing
+    && !previewChannel.isOwner;
   const channelMessages = backendChannelMessagesData?.data?.messages ?? [];
+  const handleJoinPreviewChannel = () => {
+    if (!selectedChannelId || followChannelMutation.isPending || joiningChannel) return;
+    setJoiningChannel(true);
+    followChannelMutation.mutate(selectedChannelId, {
+      onSuccess: () => setJoiningChannel(false),
+      onError: (err: unknown) => {
+        setJoiningChannel(false);
+        const msg =
+          (err as { response?: { data?: { message?: string } } })?.response?.data?.message ||
+          "Gagal bergabung ke saluran";
+        Swal.fire({ title: "Gagal", text: msg, icon: "error", timer: 2200, showConfirmButton: false });
+      },
+    });
+  };
   // Komunitas: muat ulang kalau akun berganti. Simpan dilakukan eksplisit
   // di tiap aksi (buat/kirim/hapus/keluar) — tanpa auto-save effect agar
   // tidak ada race yang menimpa storage dengan data basi.
@@ -2263,7 +2308,7 @@ function MessagesPage() {
                         >
                           <Box w="48px" h="48px" borderRadius="full" overflow="hidden" bg="var(--app-subtle)" border="1px solid" borderColor="var(--app-border)" flexShrink={0}>
                             {/* eslint-disable-next-line @next/next/no-img-element */}
-                            <img src={channelAvatar(c.avatarUrl)} alt={c.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                            <img src={channelAvatar(c.avatarUrl)} alt={c.name} className={c.avatarUrl ? undefined : "channel-logo-default"} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
                           </Box>
                           <VStack align="start" gap={0} flex={1} overflow="hidden">
                             <Text fontWeight="bold" color="var(--app-text)" fontSize="sm" truncate w="full">
@@ -2518,6 +2563,24 @@ function MessagesPage() {
                 );
               }}
             />
+          ) : selectedChannelId && needPreviewDetail && loadingPreviewChannel ? (
+            <Flex flex={1} align="center" justify="center" bg="var(--app-card)">
+              <Spinner size="lg" color="blue.500" />
+            </Flex>
+          ) : selectedChannelId && needPreviewDetail && !loadingPreviewChannel && !previewChannel ? (
+            <Flex flex={1} align="center" justify="center" bg="var(--app-card)" p={8}>
+              <VStack gap={3} textAlign="center">
+                <Text fontWeight="bold" color="var(--app-text)">
+                  Saluran tidak tersedia
+                </Text>
+                <Text fontSize="sm" color="var(--app-muted)">
+                  Mungkin sudah dihapus atau kamu diblokir pemiliknya.
+                </Text>
+                <Button size="sm" borderRadius="full" variant="outline" colorPalette="blue" onClick={() => setSelectedChannelId(null)}>
+                  Kembali
+                </Button>
+              </VStack>
+            </Flex>
           ) : selectedChannel ? (
             <ChannelChatView
               channel={{
@@ -2532,7 +2595,8 @@ function MessagesPage() {
                 ...m,
                 createdAt: typeof m.createdAt === "string" ? m.createdAt : new Date(m.createdAt).toISOString(),
               }))}
-              isOwner={selectedChannel.ownerId === currentUserId}
+              isOwner={selectedChannelIsOwner}
+              isPreview={selectedChannelIsPreview}
               unreadCount={activeChannelUnreadCount}
               firstUnreadId={activeChannelFirstUnreadId}
               onRead={() => {
@@ -2570,6 +2634,8 @@ function MessagesPage() {
                   },
                 });
               }}
+              onJoin={handleJoinPreviewChannel}
+              joining={joiningChannel || followChannelMutation.isPending}
             />
           ) : (() => {
             // Backend dulu (bisa dibuka member yang baru ditambahkan),

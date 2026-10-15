@@ -24,9 +24,16 @@ export interface BackendChannel {
   } | null;
 }
 
-export interface BackendChannelDetail extends Omit<BackendChannel, "lastMessage" | "unreadCount"> {
+export interface BackendChannelDetail extends Omit<BackendChannel, "lastMessage" | "unreadCount" | "joinedAt"> {
   ownerName: string | null;
   ownerAvatar: string | null;
+  joinedAt: string | null;
+  isFollowing: boolean;
+}
+
+export interface ChannelMessageReactionGroup {
+  emoji: string;
+  count: number;
 }
 
 export interface BackendChannelMessage {
@@ -38,13 +45,24 @@ export interface BackendChannelMessage {
   audioUrl: string | null;
   duration: number | null;
   createdAt: string;
+  reactions?: ChannelMessageReactionGroup[];
+  totalReactions?: number;
+  myEmoji?: string | null;
+}
+
+export interface ChannelMessageReactionsData {
+  messageId: string;
+  total: number;
+  reactions: ChannelMessageReactionGroup[];
+  myEmoji: string | null;
 }
 
 export interface BackendChannelMessagesData {
   messages: BackendChannelMessage[];
-  joinedAt: string;
+  joinedAt: string | null;
   unreadCount: number;
   firstUnreadId: string | null;
+  isPreview?: boolean;
 }
 
 export interface ExploreChannel {
@@ -86,6 +104,20 @@ export function useBackendChannelMessages(channelId: string | null) {
     enabled: !!channelId,
     staleTime: 1000 * 5,
     refetchInterval: 1000 * 5,
+  });
+}
+
+const getChannelDetail = async (
+  id: string,
+): Promise<BaseResponse<BackendChannelDetail>> =>
+  api.get(`/channels/${id}`).then((res) => res.data);
+
+export function useBackendChannelDetail(channelId: string | null) {
+  return useQuery({
+    queryKey: ["/channels", channelId, "detail"],
+    queryFn: () => getChannelDetail(channelId as string),
+    enabled: !!channelId,
+    staleTime: 1000 * 10,
   });
 }
 
@@ -190,6 +222,35 @@ export function useUnfollowChannel() {
   });
 }
 
+export function useReactChannelMessage(channelId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ messageId, emoji }: { messageId: string; emoji: string }) =>
+      api
+        .post(`/channels/${channelId}/messages/${messageId}/react`, { emoji })
+        .then((res) => res.data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["/channels", channelId, "messages"] });
+    },
+  });
+}
+
+export function useChannelMessageReactions(
+  channelId: string | null,
+  messageId: string | null,
+  enabled = false,
+) {
+  return useQuery<BaseResponse<ChannelMessageReactionsData>>({
+    queryKey: ["/channels", channelId, "message", messageId, "reactions"],
+    queryFn: () =>
+      api
+        .get(`/channels/${channelId}/messages/${messageId}/reactions`)
+        .then((res) => res.data),
+    enabled: !!channelId && !!messageId && enabled,
+    staleTime: 1000 * 10,
+  });
+}
+
 const getExploreChannels = async (): Promise<BaseResponse<ExploreChannel[]>> =>
   api.get("/channels/explore/popular").then((res) => res.data);
 
@@ -202,7 +263,7 @@ export function useExploreChannels(enabled = true) {
   });
 }
 
-export const DEFAULT_CHANNEL_ICON = "/icon-komunitas.png";
+export const DEFAULT_CHANNEL_ICON = "/icon-saluran.svg";
 
 export function channelAvatar(src: string | null | undefined): string {
   return src || DEFAULT_CHANNEL_ICON;

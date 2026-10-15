@@ -162,6 +162,15 @@
   filter: invert(1);
 }
 
+/* Logo default saluran (icon megaphone ala WA): hitam di light mode,
+   putih di dark mode (invert). Hanya dipakai saat avatar null. */
+.channel-logo-default {
+  filter: none;
+}
+.dark .channel-logo-default {
+  filter: invert(1);
+}
+
 /* Equalizer musik catatan: bar naik-turun kayak lagu lagi distel */
 @keyframes note-eq-bounce {
   0%,

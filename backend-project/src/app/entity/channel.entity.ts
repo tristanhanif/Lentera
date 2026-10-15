@@ -108,6 +108,41 @@ export class ChannelMessage {
   @Column({ type: 'int', nullable: true })
   duration: number | null;
 
+  @OneToMany(() => ChannelMessageReaction, (r) => r.message)
+  reactions: ChannelMessageReaction[];
+
+  @CreateDateColumn()
+  createdAt: Date;
+}
+
+// Reaksi emoji pengikut ke bubble chat saluran (ala WA Channels).
+// 1 user = 1 emoji per pesan (ganti emoji = update, pencet lagi = hapus).
+@Entity('channel_message_reactions')
+@Unique(['messageId', 'userId'])
+export class ChannelMessageReaction {
+  @PrimaryGeneratedColumn('uuid')
+  id: string;
+
+  @ManyToOne(() => ChannelMessage, (m) => m.reactions, { onDelete: 'CASCADE' })
+  @JoinColumn({ name: 'messageId' })
+  message: ChannelMessage;
+
+  @Column()
+  messageId: string;
+
+  @Column()
+  channelId: string;
+
+  @ManyToOne(() => User, { onDelete: 'CASCADE' })
+  @JoinColumn({ name: 'userId' })
+  user: User;
+
+  @Column()
+  userId: string;
+
+  @Column({ length: 16 })
+  emoji: string;
+
   @CreateDateColumn()
   createdAt: Date;
 }

@@ -14,6 +14,7 @@ import { ChannelService } from './channel.service';
 import { AtGuard } from '../common/guards/at.guard';
 import {
   CreateChannelDto,
+  ReactChannelMessageDto,
   SendChannelTextDto,
   SendChannelVoiceDto,
   UpdateChannelDto,
@@ -112,6 +113,31 @@ export class ChannelController {
   @Delete(':id/follow')
   async unfollow(@Param('id') id: string) {
     const data = await this.channelService.unfollow(this.req.user.sub, id);
+    return { message: 'OK', data };
+  }
+
+  @Post(':id/messages/:messageId/react')
+  async react(
+    @Param('id') id: string,
+    @Param('messageId') messageId: string,
+    @Body() dto: ReactChannelMessageDto,
+  ) {
+    const data = await this.channelService.reactToMessage(
+      this.req.user.sub,
+      id,
+      messageId,
+      dto.emoji,
+    );
+    return { message: 'OK', data };
+  }
+
+  @Get(':id/messages/:messageId/reactions')
+  async reactions(@Param('id') id: string, @Param('messageId') messageId: string) {
+    const data = await this.channelService.getMessageReactions(
+      this.req.user.sub,
+      id,
+      messageId,
+    );
     return { message: 'OK', data };
   }
 }

@@ -6,13 +6,14 @@ import {
   Channel,
   ChannelFollow,
   ChannelMessage,
+  ChannelMessageReaction,
 } from '../app/entity/channel.entity';
 import { User } from '../app/entity/user.entity';
 import { BlocksModule } from '../blocks/blocks.module';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Channel, ChannelFollow, ChannelMessage, User]),
+    TypeOrmModule.forFeature([Channel, ChannelFollow, ChannelMessage, ChannelMessageReaction, User]),
     BlocksModule,
   ],
   controllers: [ChannelController],

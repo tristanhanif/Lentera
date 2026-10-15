@@ -50,3 +50,10 @@ export class SendChannelVoiceDto {
   @Max(300)
   duration: number;
 }
+
+export class ReactChannelMessageDto {
+  @IsString()
+  @MinLength(1)
+  @MaxLength(16)
+  emoji: string;
+}

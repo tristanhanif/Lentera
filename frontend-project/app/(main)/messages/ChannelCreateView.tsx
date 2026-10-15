@@ -176,6 +176,7 @@ export default function ChannelCreateView({ onClose, onCreated }: ChannelCreateV
             <img
               src={displayLogo}
               alt="Logo saluran"
+              className={logoPreview ? undefined : "channel-logo-default"}
               style={{ width: "100%", height: "100%", objectFit: "cover", opacity: uploadingLogo ? 0.6 : 1 }}
             />
           </Box>
