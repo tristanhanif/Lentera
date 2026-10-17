@@ -24,6 +24,7 @@ import {
   Pause,
   Play,
   SquarePlay,
+  Star,
   Trash2,
   User,
   Volume2,
@@ -635,6 +636,23 @@ export default function StoryUsernamePage() {
           </HStack>
 
           <HStack gap={0} flexShrink={0}>
+            {/* Tanda close-friend: buletan biru bintang kuning di kiri pause/play */}
+            {(item.audience ?? "public") === "close" && (
+              <Box
+                w="32px"
+                h="32px"
+                borderRadius="full"
+                bg="blue.500"
+                display="flex"
+                alignItems="center"
+                justifyContent="center"
+                title="Story teman terdekat"
+                aria-label="Story teman terdekat"
+                flexShrink={0}
+              >
+                <Star size={16} color="#facc15" fill="#facc15" />
+              </Box>
+            )}
             {(item.type === "video" || music) && !locked && (
               <IconButton
                 aria-label={muted ? "Aktifkan suara" : "Bisukan"}

@@ -17,6 +17,7 @@ interface StoryAvatarProps {
 }
 
 // Avatar dengan lingkaran story ala IG:
+// - story close-friend (semua close) + ada yang belum dilihat -> biru
 // - punya story + ada yang belum dilihat -> gradient orange-kuning
 // - punya story + semua sudah dilihat -> abu-abu
 // - tidak punya story -> polos tanpa ring
@@ -41,6 +42,10 @@ export function StoryAvatar({
 
   const hasStory = !!group;
   const hasUnviewed = group?.items.some((s) => !s.isViewedByMe) ?? false;
+  const allClose =
+    !!group &&
+    group.items.length > 0 &&
+    group.items.every((s) => (s.audience ?? "public") === "close");
 
   const handleClick = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -64,9 +69,13 @@ export function StoryAvatar({
       flexShrink={0}
       bg={
         hasStory
-          ? hasUnviewed
-            ? "linear-gradient(to top right, #f97316, #facc15)"
-            : "var(--app-border)"
+          ? allClose
+            ? hasUnviewed
+              ? "blue.500"
+              : "var(--app-border)"
+            : hasUnviewed
+              ? "linear-gradient(to top right, #f97316, #facc15)"
+              : "var(--app-border)"
           : "transparent"
       }
       title={hasStory ? `Lihat story ${group?.user.username}` : undefined}

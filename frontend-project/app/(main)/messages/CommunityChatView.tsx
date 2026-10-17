@@ -19,6 +19,7 @@ import {
   ChevronUp,
   EllipsisVertical,
   LogOut,
+  Mic,
   Paintbrush,
   RefreshCw,
   Search,
@@ -31,6 +32,8 @@ import { AnimatePresence, motion } from "framer-motion";
 import type { Community, CommunityMember } from "./community.store";
 import { communityAvatar } from "./community.store";
 import CommunityInfoView from "./CommunityInfoView";
+import DMVoiceRecorder from "./components/DMVoiceRecorder";
+import CommunityVoiceBubble from "./components/CommunityVoiceBubble";
 import {
   CHAT_THEMES,
   CHAT_THEME_DEFAULT_ID,

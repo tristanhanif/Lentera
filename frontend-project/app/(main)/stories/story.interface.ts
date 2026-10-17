@@ -48,6 +48,7 @@ export interface StoryItem {
   type: StoryType;
   layout: StoryLayout;
   caption: string | null;
+  audience: "public" | "close";
   music: StoryMusic | null;
   text: StoryText | null;
   post?: {
@@ -91,6 +92,7 @@ export interface CreateStoryPayload {
   type: StoryType;
   layout?: StoryLayout;
   caption?: string;
+  audience?: "public" | "close";
   unlockAt?: string;
   music?: StoryMusic;
   text?: StoryText;

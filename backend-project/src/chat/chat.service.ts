@@ -80,6 +80,8 @@ export class ChatService {
                 senderId: lastMessage.senderId,
                 isRead: lastMessage.isRead,
                 createdAt: lastMessage.createdAt,
+                audioUrl: lastMessage.audioUrl ?? null,
+                voiceDuration: lastMessage.voiceDuration ?? null,
               }
             : null,
           unreadCount,
@@ -245,6 +247,10 @@ export class ChatService {
       fileSize?: number | null;
       fileType?: string | null;
     },
+    voiceAttachment?: {
+      audioUrl?: string | null;
+      voiceDuration?: number | null;
+    },
   ) {
     const conversation = await this.conversationRepo.findOne({
       where: { id: conversationId },
@@ -300,6 +306,20 @@ export class ChatService {
       }
     }
 
+    // Validasi VN: audioUrl + durasi 1-300 detik (sama kayak saluran).
+    const audioUrl = (voiceAttachment?.audioUrl ?? '').trim() || null;
+    let voiceDuration: number | null = null;
+    if (audioUrl) {
+      const secs = Math.round(Number(voiceAttachment?.voiceDuration ?? 0));
+      if (!Number.isFinite(secs) || secs < 1 || secs > 300) {
+        throw new BadRequestException('Durasi VN 1–300 detik');
+      }
+      if (audioUrl.length > 2000) {
+        throw new BadRequestException('Audio tidak valid');
+      }
+      voiceDuration = secs;
+    }
+
     const message = this.messageRepo.create({
       text,
       senderId: userId,
@@ -332,6 +352,8 @@ export class ChatService {
       fileType: fileAttachment?.fileType
         ? fileAttachment.fileType.toLowerCase()
         : null,
+      audioUrl,
+      voiceDuration,
     });
 
     const savedMessage = await this.messageRepo.save(message);

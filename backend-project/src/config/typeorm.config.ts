@@ -18,7 +18,7 @@ import { LoginSession } from 'src/app/entity/login-session.entity';
 import { UserBlock } from 'src/app/entity/user-block.entity';
 import { CloseFriend } from 'src/app/entity/close-friend.entity';
 import { Community, CommunityMember, CommunityMessage } from 'src/app/entity/community.entity';
-import { Channel, ChannelFollow, ChannelMessage } from 'src/app/entity/channel.entity';
+import { Channel, ChannelFollow, ChannelMessage, ChannelMessageReaction } from 'src/app/entity/channel.entity';
 export const typeOrmConfig: TypeOrmModuleOptions = {
   type: 'mysql',
   host: process.env.DB_HOST,
@@ -31,7 +31,7 @@ export const typeOrmConfig: TypeOrmModuleOptions = {
   // lalu dikirim ke frontend sebagai 19:21Z kemarin → tampil tetap 02.21.
   // 'Z' = baca/tulis selalu sebagai UTC, frontend tinggal konversi ke Asia/Jakarta.
   timezone: 'Z',
-  entities: [User, PasswordResetToken, Posts, Media, Likes, Comments, CommentLike, Notification, Follow, Conversation, Message, Reposts, SavedPost, Story, StoryMedia, StoryView, StoryLike, Note, LoginSession, UserBlock, CloseFriend, Community, CommunityMember, CommunityMessage, Channel, ChannelFollow, ChannelMessage],
+  entities: [User, PasswordResetToken, Posts, Media, Likes, Comments, CommentLike, Notification, Follow, Conversation, Message, Reposts, SavedPost, Story, StoryMedia, StoryView, StoryLike, Note, LoginSession, UserBlock, CloseFriend, Community, CommunityMember, CommunityMessage, Channel, ChannelFollow, ChannelMessage, ChannelMessageReaction],
   synchronize: true,
   // logging: true,
 };

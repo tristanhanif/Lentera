@@ -66,6 +66,10 @@ export function StoryBar({ stories, onCreate, onOpen, onOpenOwn }: StoryBarProps
   const ownUsername = ownGroup?.user.username ?? profile?.username ?? "";
   const hasUnviewedOwn =
     ownGroup?.items.some((s) => !s.isViewedByMe) ?? false;
+  const allCloseOwn =
+    !!ownGroup &&
+    ownGroup.items.length > 0 &&
+    ownGroup.items.every((s) => (s.audience ?? "public") === "close");
   const allLockedOwn =
     !!ownGroup && ownGroup.items.every((s) => s.isLocked);
   const nearestUnlockOwn =
@@ -123,9 +127,13 @@ export function StoryBar({ stories, onCreate, onOpen, onOpenOwn }: StoryBarProps
             borderRadius="full"
             bg={
               hasOwnStory
-                ? hasUnviewedOwn
-                  ? "linear-gradient(to top right, #f97316, #facc15)"
-                  : "var(--app-border)"
+                ? allCloseOwn
+                  ? hasUnviewedOwn
+                    ? "blue.500"
+                    : "var(--app-border)"
+                  : hasUnviewedOwn
+                    ? "linear-gradient(to top right, #f97316, #facc15)"
+                    : "var(--app-border)"
                 : "transparent"
             }
             cursor="pointer"
@@ -217,6 +225,9 @@ export function StoryBar({ stories, onCreate, onOpen, onOpenOwn }: StoryBarProps
         ) : (
           visibleGroups.map((group, index) => {
             const hasUnviewed = group.items.some((s) => !s.isViewedByMe);
+            const allClose =
+              group.items.length > 0 &&
+              group.items.every((s) => (s.audience ?? "public") === "close");
             const allLocked = group.items.every((s) => s.isLocked);
             // Kapsul: tampilkan yang paling cepat terbuka.
             const nearestUnlock = group.items.reduce(
@@ -230,9 +241,13 @@ export function StoryBar({ stories, onCreate, onOpen, onOpenOwn }: StoryBarProps
                   p="3px"
                   borderRadius="full"
                   bg={
-                    hasUnviewed
-                      ? "linear-gradient(to top right, #f97316, #facc15)"
-                      : "var(--app-border)"
+                    allClose
+                      ? hasUnviewed
+                        ? "blue.500"
+                        : "var(--app-border)"
+                      : hasUnviewed
+                        ? "linear-gradient(to top right, #f97316, #facc15)"
+                        : "var(--app-border)"
                   }
                   cursor="pointer"
                   onClick={() => onOpen(index)}

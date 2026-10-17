@@ -189,6 +189,8 @@ export class CommunityService {
                 senderId: lastMessage.senderId,
                 isEvent: lastMessage.isEvent,
                 createdAt: lastMessage.createdAt,
+                audioUrl: lastMessage.audioUrl ?? null,
+                voiceDuration: lastMessage.voiceDuration ?? null,
               }
             : null,
         };
@@ -300,6 +302,8 @@ export class CommunityService {
       text: msg.text,
       isEvent: msg.isEvent,
       createdAt: msg.createdAt,
+      audioUrl: msg.audioUrl ?? null,
+      voiceDuration: msg.voiceDuration ?? null,
     }));
     // Unread = pesan orang lain setelah lastSeen (sudah pasti > visibleSince).
     const unreadIds = mapped
@@ -320,17 +324,37 @@ export class CommunityService {
     return { message: 'Ditandai dibaca', unreadCount: 0 };
   }
 
-  async sendMessage(userId: string, communityId: string, text: string) {
+  async sendMessage(
+    userId: string,
+    communityId: string,
+    text: string,
+    voice?: { audioUrl?: string | null; voiceDuration?: number | null },
+  ) {
     const member = await this.requireMembership(userId, communityId);
     const v = text.trim().slice(0, 2000);
     if (!v) {
       throw new BadRequestException('Pesan tidak boleh kosong');
+    }
+    // Validasi VN: audioUrl + durasi 1-300 detik (sama kayak DM/saluran).
+    const audioUrl = (voice?.audioUrl ?? '').trim() || null;
+    let voiceDuration: number | null = null;
+    if (audioUrl) {
+      const secs = Math.round(Number(voice?.voiceDuration ?? 0));
+      if (!Number.isFinite(secs) || secs < 1 || secs > 300) {
+        throw new BadRequestException('Durasi VN 1–300 detik');
+      }
+      if (audioUrl.length > 2000) {
+        throw new BadRequestException('Audio tidak valid');
+      }
+      voiceDuration = secs;
     }
     const saved = await this.messageRepo.save({
       communityId,
       senderId: userId,
       text: v,
       isEvent: false,
+      audioUrl,
+      voiceDuration,
     });
     await this.communityRepo.update({ id: communityId }, { updatedAt: new Date() });
     // Pengirim otomatis dianggap sudah baca sampai pesannya sendiri.
@@ -350,6 +374,8 @@ export class CommunityService {
       text: v,
       isEvent: false,
       createdAt: saved.createdAt ?? new Date(),
+      audioUrl,
+      voiceDuration,
     };
   }
 

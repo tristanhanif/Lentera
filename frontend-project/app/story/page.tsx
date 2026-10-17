@@ -24,7 +24,6 @@ import { useGetPostById } from "@/app/(main)/post/post.service";
 import { MusicPlayingIcon } from "@/app/(main)/messages/NotesBar";
 import { LayoutPicker, StoryLayoutCount } from "./components/LayoutPicker";
 import { StoryUploadToast } from "./components/StoryUploadToast";
-import { CreateTabs } from "./components/CreateTabs";
 import { MusicPanel } from "./components/MusicPanel";
 import { TextPanel } from "./components/TextPanel";
 import { StoryTextSticker } from "./components/StoryTextSticker";
@@ -187,6 +186,9 @@ function StoryPageInner() {
   // Rasio kotak ngikutin frame postingan (asli/1:1/4:5/16:9), dideteksi
   // dari dimensi gambar saat dimuat.
   const [postAspect, setPostAspect] = useState("4 / 5");
+  // Audiens story ala IG Close Friend: public = semua bisa lihat (default),
+  // close = hanya teman dekat (dari /akun/teman_dekat).
+  const [audience, setAudience] = useState<"public" | "close">("public");
   const postScaleRef = useRef(1);
   const postBoxRef = useRef<HTMLDivElement | null>(null);
   const postPinchRef = useRef<{
@@ -214,6 +216,7 @@ function StoryPageInner() {
         setPendingCheck(false);
         setMusic(null);
         setTextSticker(null);
+        setAudience("public");
       }
     }
     setSharePostId(queryPostId);
@@ -613,6 +616,7 @@ function StoryPageInner() {
     setHint(null);
     setDecorate(false);
     setPendingCheck(false);
+    setAudience("public");
     // Kembali ke tahap ambil gambar → pastikan kamera nyala.
     if (!streamRef.current) startCamera(facing);
   };
@@ -1019,6 +1023,7 @@ function StoryPageInner() {
       await api.post("/stories", {
         type: isVideo ? "video" : "photo",
         layout: layoutToBackend(layout),
+        audience,
         ...(music?.previewUrl
           ? {
               music: {
@@ -1081,7 +1086,7 @@ function StoryPageInner() {
         key={idx}
         position="relative"
         overflow="hidden"
-        bg={cell ? "black" : "whiteAlpha.200"}
+        bg={cell ? "black" : "#2d2d2d"}
         cursor="pointer"
         onClick={() => handleCellTap(idx)}
         outline={isActive ? "2px solid white" : "none"}
@@ -1134,16 +1139,45 @@ function StoryPageInner() {
             )}
           </>
         ) : (
-          // Kotak kosong non-aktif: abu kamera ala IG, tanpa tulisan.
+          // Kotak kosong non-aktif: samar kamera blur (tetap gelap di light/dark mode).
+          // Biar terlihat jelas di atas background terang maupun hitam.
           <Flex
             w="full"
             h="full"
             minH="120px"
             align="center"
             justify="center"
-            color="whiteAlpha.600"
+            position="relative"
+            overflow="hidden"
+            bg="#2d2d2d"
+            color="white"
           >
-            <Camera size={28} />
+            {/* Bokeh blur samar ala kamera */}
+            <Box
+              position="absolute"
+              w="70%"
+              h="60%"
+              left="-10%"
+              top="-10%"
+              borderRadius="full"
+              bg="whiteAlpha.200"
+              filter="blur(28px)"
+              pointerEvents="none"
+            />
+            <Box
+              position="absolute"
+              w="60%"
+              h="55%"
+              right="-12%"
+              bottom="-15%"
+              borderRadius="full"
+              bg="blackAlpha.500"
+              filter="blur(24px)"
+              pointerEvents="none"
+            />
+            <Box position="relative" opacity={0.9} display="flex">
+              <Camera size={28} />
+            </Box>
           </Flex>
         )}
 
@@ -1183,14 +1217,14 @@ function StoryPageInner() {
     );
   };
 
-  // Alat hias kanan atas (di bawah icon sampah): musik, emoji, pen.
-  // Buletan musik: kalau sudah pilih lagu, buletan icon musik diganti
-  // jadi buletan gambar musik (cover). Hanya buletan ini yang berubah.
+  // Alat persiapan story: deret horizontal kanan atas —
+  // musik (abu) | pen/teks (abu) | emoji (abu) | sampah merah (hapus foto aktif).
+  // Kalau sudah pilih lagu, icon musik diganti album cover berputar (hemat tempat,
+  // chip judul di kiri atas dihapus).
   const renderDecorateTools = () => (
-    <Box position="absolute" top="48px" right="8px" zIndex={2}>
-      <Box display="flex" flexDirection="column" gap={2}>
-        {/* Mode bagikan postingan: buletan musik tetap ada tapi dikunci,
-            cover-nya berputar kayak biasa masang story. */}
+    <Box position="absolute" top="10px" right="10px" zIndex={3}>
+      <Box display="flex" flexDirection="row" gap={2}>
+        {/* Musik: abu kalau belum pilih, album berputar kalau sudah pilih */}
         <Box
           as="button"
           aria-label={postShare ? "Musik dari postingan" : "Musik"}
@@ -1256,7 +1290,7 @@ function StoryPageInner() {
                     height: "100%",
                     objectFit: "cover",
                     borderRadius: "50%",
-                    ...(postShare ? { animation: "postShareSpin 6s linear infinite" } : {}),
+                    animation: "postShareSpin 6s linear infinite",
                   }}
                 />
               );
@@ -1309,6 +1343,28 @@ function StoryPageInner() {
             <Icon size={18} />
           </Box>
         ))}
+        {/* Sampah merah: hapus foto/video aktif */}
+        <Box
+          as="button"
+          aria-label="Hapus foto"
+          title="Hapus foto"
+          onClick={() => clearCell(activeCell)}
+          w="40px"
+          h="40px"
+          borderRadius="full"
+          bg="red.500"
+          border="1.5px solid"
+          borderColor="whiteAlpha.700"
+          display="flex"
+          alignItems="center"
+          justifyContent="center"
+          color="white"
+          cursor="pointer"
+          backdropFilter="blur(8px)"
+          _hover={{ bg: "red.600" }}
+        >
+          <Trash2 size={18} />
+        </Box>
       </Box>
     </Box>
   );
@@ -1576,7 +1632,7 @@ function StoryPageInner() {
     if (layout === 1) {
       return (
         <Box bg={gridBg} borderRadius="2xl" overflow="hidden">
-          <Box h={{ base: "52dvh", md: "62dvh" }} minH="320px">
+          <Box h={{ base: "68dvh", md: "75dvh" }} minH="420px">
             {renderCell(0)}
           </Box>
         </Box>
@@ -1650,7 +1706,7 @@ function StoryPageInner() {
     const isVideoShare = postShare?.isVideo === true || cell.kind === "video";
     return (
       <Box position="relative" borderRadius="2xl" overflow="hidden">
-        <Box h={{ base: "52dvh", md: "62dvh" }} minH="320px" position="relative">
+        <Box h={{ base: "68dvh", md: "75dvh" }} minH="420px" position="relative">
           {/* Background: media dilebarkan + blur */}
           {isVideoShare ? (
             <video
@@ -1861,8 +1917,8 @@ function StoryPageInner() {
       <Box
         position="fixed"
         inset={0}
-        bg="black"
-        color="white"
+        bg="var(--app-bg)"
+        color="var(--app-text)"
         zIndex={100}
         overflowY="auto"
       >
@@ -1874,13 +1930,15 @@ function StoryPageInner() {
           py={3}
           align="center"
           justify="space-between"
-          bg="blackAlpha.700"
+          bg="var(--app-card)"
+          borderBottom="1px solid"
+          borderColor="var(--app-border)"
         >
           <IconButton
             aria-label="Tutup"
             variant="ghost"
-            color="white"
-            _hover={{ bg: "whiteAlpha.200" }}
+            color="var(--app-text)"
+            _hover={{ bg: "var(--app-hover)" }}
             onClick={() => router.push("/")}
           >
             <X size={22} />
@@ -1906,7 +1964,7 @@ function StoryPageInner() {
               <Box
                 as="button"
                 onClick={() => router.push("/")}
-                bg="whiteAlpha.200"
+                bg="var(--app-hover)"
                 px={5}
                 py={2}
                 borderRadius="full"
@@ -1919,8 +1977,8 @@ function StoryPageInner() {
             </>
           ) : (
             <>
-              <Spinner size="lg" color="white" />
-              <Text fontSize="xs" color="whiteAlpha.700">
+              <Spinner size="lg" color="blue.500" />
+              <Text fontSize="xs" color="var(--app-muted)">
                 Memuat postingan...
               </Text>
             </>
@@ -1935,8 +1993,8 @@ function StoryPageInner() {
     <Box
       position="fixed"
       inset={0}
-      bg="black"
-      color="white"
+      bg="var(--app-bg)"
+      color="var(--app-text)"
       zIndex={100}
       overflowY="auto"
     >
@@ -1948,7 +2006,7 @@ function StoryPageInner() {
         onChange={handleGalleryChange}
       />
 
-      {/* Top bar */}
+      {/* Top bar (tanpa tulisan STORY, tanpa refresh — refresh pindah ke dalam kotak kamera) */}
       <Flex
         position="sticky"
         top={0}
@@ -1957,46 +2015,48 @@ function StoryPageInner() {
         py={3}
         align="center"
         justify="space-between"
-        bg="blackAlpha.700"
+        bg="var(--app-card)"
+        borderBottom="1px solid"
+        borderColor="var(--app-border)"
         backdropFilter="blur(8px)"
       >
         <IconButton
           aria-label="Tutup"
           variant="ghost"
-          color="white"
-          _hover={{ bg: "whiteAlpha.200" }}
+          color="var(--app-text)"
+          _hover={{ bg: "var(--app-hover)" }}
           onClick={() => router.push("/")}
         >
           <X size={22} />
         </IconButton>
-        <Text fontWeight="black" fontSize="sm" letterSpacing="wide">
-          STORY
-        </Text>
-        <IconButton
-          aria-label="Ganti kamera"
-          variant="ghost"
-          color="white"
-          _hover={{ bg: "whiteAlpha.200" }}
-          onClick={switchCamera}
-        >
-          <RefreshCw size={20} />
-        </IconButton>
+        <Box w="40px" />
       </Flex>
 
-      {/* Body */}
-      <Flex px={4} gap={4} align="center" justify="center" mt={2}>
-        {/* Kiri tengah: layout picker (disembunyikan saat bagikan postingan) */}
-        {!postShare && (
-        <Box position="sticky" top="120px" alignSelf="center">
-          <LayoutPicker value={layout} onChange={handleLayoutChange} />
+      {/* Body: kiri branding, tengah kamera yang dibesarkan */}
+      <Flex px={4} gap={6} align="flex-start" justify="center" mt={4}>
+        {/* Kiri halaman: branding atas-bawah */}
+        <Box
+          display={{ base: "none", md: "flex" }}
+          flexDirection="column"
+          alignItems="flex-start"
+          pt={2}
+          minW="160px"
+          position="sticky"
+          top="100px"
+        >
+          <Text fontWeight="black" fontSize="2xl" color="blue.500" lineHeight={1}>
+            Lentera
+          </Text>
+          <Text fontWeight="bold" fontSize="lg" color="var(--app-text)" mt={1}>
+            Story
+          </Text>
         </Box>
-        )}
 
-        {/* Tengah: kamera */}
-        <Box w="full" maxW="400px">
+        {/* Tengah: kamera (dilebarkan + dipanjangkan) */}
+        <Box w="full" maxW="560px" pb={8}>
           {!postShare && !cameraReady && !cameraError && (
             <Flex h="200px" align="center" justify="center">
-              <Spinner size="lg" color="white" />
+              <Spinner size="lg" color="blue.500" />
             </Flex>
           )}
           <Box position="relative" ref={canvasRef}>
@@ -2007,10 +2067,103 @@ function StoryPageInner() {
             `}</style>
             {postShare ? renderPostShareCanvas() : renderGrid()}
             {renderPostShareGate()}
+            {/* Kiri tengah DI DALAM kotak kamera: layout picker */}
+            {!postShare && !decorate && !pendingCheck && (
+              <Box
+                position="absolute"
+                left="10px"
+                top="50%"
+                transform="translateY(-50%)"
+                zIndex={3}
+              >
+                <LayoutPicker value={layout} onChange={handleLayoutChange} />
+              </Box>
+            )}
+            {/* Kanan DI DALAM kotak kamera: refresh depan/belakang */}
+            {!postShare && !decorate && !pendingCheck && (
+              <IconButton
+                aria-label="Ganti kamera"
+                position="absolute"
+                right="10px"
+                top="10px"
+                zIndex={3}
+                borderRadius="full"
+                w="40px"
+                h="40px"
+                bg="blackAlpha.600"
+                color="white"
+                border="1.5px solid"
+                borderColor="whiteAlpha.700"
+                backdropFilter="blur(8px)"
+                _hover={{ bg: "blackAlpha.800" }}
+                onClick={switchCamera}
+              >
+                <RefreshCw size={18} />
+              </IconButton>
+            )}
             {decorate && renderDecorateTools()}
-            {(decorate || pendingCheck) && renderMusicChip()}
             {(decorate || pendingCheck) && renderMusicSticker()}
             {(decorate || pendingCheck) && renderTextSticker()}
+            {/* Pilihan audiens DI DALAM kotak kamera (tahap persiapan):
+                kiri biru-putih (teman dekat), kanan putih-hitam (publik). */}
+            {(decorate || pendingCheck) && (
+              <Flex
+                position="absolute"
+                bottom="100px"
+                left="12px"
+                right="12px"
+                zIndex={3}
+                gap={2}
+                justify="center"
+              >
+                <Box
+                  as="button"
+                  flex={1}
+                  maxW="220px"
+                  borderRadius="xl"
+                  px={2}
+                  py={2}
+                  bg="blue.500"
+                  color="white"
+                  border="2px solid"
+                  borderColor={audience === "close" ? "white" : "transparent"}
+                  boxShadow={audience === "close" ? "0 0 0 1px rgba(255,255,255,0.6)" : "none"}
+                  fontSize="xs"
+                  fontWeight="bold"
+                  textAlign="center"
+                  lineHeight="1.3"
+                  cursor="pointer"
+                  _hover={{ bg: "blue.600" }}
+                  onClick={() => setAudience("close")}
+                  title="Kirim hanya ke teman terdekat"
+                >
+                  Kirim hanya ke teman terdekat
+                </Box>
+                <Box
+                  as="button"
+                  flex={1}
+                  maxW="220px"
+                  borderRadius="xl"
+                  px={2}
+                  py={2}
+                  bg="white"
+                  color="black"
+                  border="2px solid"
+                  borderColor={audience === "public" ? "white" : "transparent"}
+                  boxShadow={audience === "public" ? "0 0 0 1px rgba(255,255,255,0.6)" : "none"}
+                  fontSize="xs"
+                  fontWeight="bold"
+                  textAlign="center"
+                  lineHeight="1.3"
+                  cursor="pointer"
+                  _hover={{ bg: "gray.100" }}
+                  onClick={() => setAudience("public")}
+                  title="Kirim ke publik"
+                >
+                  Kirim ke publik
+                </Box>
+              </Flex>
+            )}
             {/* Tong sampah: muncul dari bawah saat stiker diseret 1 jari */}
             {(decorate || pendingCheck) && draggingSticker && (
               <Box
@@ -2042,10 +2195,174 @@ function StoryPageInner() {
                 </Box>
               </Box>
             )}
+            {/* Kontrol bawah DI DALAM kotak kamera:
+                kiri galeri, tengah shutter/centang, kanan kirim (hanya bila sudah ada media) */}
+            {!postShare ? (
+              <Flex
+                position="absolute"
+                bottom="12px"
+                left="12px"
+                right="12px"
+                zIndex={3}
+                align="flex-end"
+                justify="space-between"
+              >
+                {/* Bawah kiri dalam: galeri + buletan biru plus */}
+                <Box
+                  as="button"
+                  aria-label="Upload gambar"
+                  onClick={openGallery}
+                  position="relative"
+                  w="52px"
+                  h="52px"
+                  borderRadius="lg"
+                  overflow="visible"
+                  bg="blackAlpha.600"
+                  border="1px solid"
+                  borderColor="whiteAlpha.400"
+                  display="flex"
+                  alignItems="center"
+                  justifyContent="center"
+                  cursor="pointer"
+                  backdropFilter="blur(8px)"
+                  _hover={{ bg: "blackAlpha.800" }}
+                  flexShrink={0}
+                >
+                  <ImageIcon size={22} color="white" />
+                  <Box
+                    position="absolute"
+                    bottom="-8px"
+                    right="-8px"
+                    w="24px"
+                    h="24px"
+                    borderRadius="full"
+                    bg="blue.500"
+                    border="2px solid black"
+                    display="flex"
+                    alignItems="center"
+                    justifyContent="center"
+                  >
+                    <Plus size={14} color="white" />
+                  </Box>
+                </Box>
+
+                {/* Tengah dalam: shutter / centang (tanpa tulisan hint) */}
+                {!decorate && (
+                  <Box display="flex" flexDirection="column" alignItems="center" gap={1}>
+                    {pendingCheck ? (
+                      <Box
+                        as="button"
+                        aria-label="Sudah siap"
+                        onClick={() => {
+                          setPendingCheck(false);
+                          setDecorate(true);
+                          stopStream();
+                        }}
+                        w="76px"
+                        h="76px"
+                        borderRadius="full"
+                        border="4px solid white"
+                        display="flex"
+                        alignItems="center"
+                        justifyContent="center"
+                        cursor="pointer"
+                        bg="linear-gradient(135deg, #f97316, #ec4899, #8b5cf6)"
+                        touchAction="manipulation"
+                        userSelect="none"
+                      >
+                        <Check size={32} color="white" strokeWidth={3} />
+                      </Box>
+                    ) : (
+                      <Box
+                        as="button"
+                        aria-label={layout === 1 ? "Foto atau tahan untuk video" : "Ambil foto"}
+                        onPointerDown={onShutterDown}
+                        onPointerUp={onShutterUp}
+                        onPointerLeave={() => {
+                          if (recording) stopRecording();
+                          if (pressTimerRef.current) {
+                            clearTimeout(pressTimerRef.current);
+                            pressTimerRef.current = null;
+                          }
+                        }}
+                        onContextMenu={(e) => e.preventDefault()}
+                        w="76px"
+                        h="76px"
+                        borderRadius="full"
+                        border="4px solid white"
+                        display="flex"
+                        alignItems="center"
+                        justifyContent="center"
+                        cursor="pointer"
+                        bg="transparent"
+                        touchAction="none"
+                        userSelect="none"
+                        position="relative"
+                      >
+                        <Box
+                          w="60px"
+                          h="60px"
+                          borderRadius="full"
+                          bg={recording ? "red.500" : "white"}
+                          transition="0.15s"
+                        />
+                      </Box>
+                    )}
+                    {recording && (
+                      <Text fontSize="10px" color="white" fontWeight="bold"
+                        bg="blackAlpha.600" px={2} py={0.5} borderRadius="full">
+                        {`● ${recElapsed}d / 15d`}
+                      </Text>
+                    )}
+                  </Box>
+                )}
+
+                {/* Kanan dalam: kirim — hanya tampil bila sudah ada foto/video (orange) */}
+                {canSubmit ? (
+                  <IconButton
+                    aria-label="Bagikan story"
+                    borderRadius="full"
+                    w="52px"
+                    h="52px"
+                    bg="orange.500"
+                    color="white"
+                    _hover={{ bg: "orange.600" }}
+                    loading={submitting}
+                    onClick={handleSubmit}
+                    flexShrink={0}
+                  >
+                    <Send size={20} />
+                  </IconButton>
+                ) : (
+                  <Box w="52px" h="52px" flexShrink={0} />
+                )}
+              </Flex>
+            ) : (
+              <>
+                {/* Mode bagikan postingan: hanya tombol kirim di kanan bawah dalam */}
+                {canSubmit && (
+                  <Box position="absolute" bottom="12px" right="12px" zIndex={3}>
+                    <IconButton
+                      aria-label="Bagikan story"
+                      borderRadius="full"
+                      w="52px"
+                      h="52px"
+                      bg="orange.500"
+                      color="white"
+                      _hover={{ bg: "orange.600" }}
+                      loading={submitting}
+                      onClick={handleSubmit}
+                    >
+                      <Send size={20} />
+                    </IconButton>
+                  </Box>
+                )}
+              </>
+            )}
           </Box>
 
           {cameraError && (
-            <Text fontSize="xs" color="whiteAlpha.600" textAlign="center" mt={2}>
+            <Text fontSize="xs" color="var(--app-muted)" textAlign="center" mt={2}>
               {cameraError}
             </Text>
           )}
@@ -2061,154 +2378,12 @@ function StoryPageInner() {
               {hint}
             </Text>
           )}
-
-          {/* Kontrol bawah */}
-          <Flex align="center" justify="space-between" mt={5} mb={8} px={1}>
-            {/* Bawah kiri: kotak gambar + buletan biru tambah
-                (disembunyikan saat bagikan postingan: gambar dikunci) */}
-            {!postShare ? (
-            <Box
-              as="button"
-              aria-label="Upload gambar"
-              onClick={openGallery}
-              position="relative"
-              w="52px"
-              h="52px"
-              borderRadius="lg"
-              overflow="visible"
-              bg="whiteAlpha.200"
-              border="1px solid"
-              borderColor="whiteAlpha.400"
-              display="flex"
-              alignItems="center"
-              justifyContent="center"
-              cursor="pointer"
-              _hover={{ bg: "whiteAlpha.300" }}
-            >
-              <ImageIcon size={22} color="white" />
-              <Box
-                position="absolute"
-                bottom="-8px"
-                right="-8px"
-                w="24px"
-                h="24px"
-                borderRadius="full"
-                bg="blue.500"
-                border="2px solid black"
-                display="flex"
-                alignItems="center"
-                justifyContent="center"
-              >
-                <Plus size={14} color="white" />
-              </Box>
-            </Box>
-            ) : (
-              <Box w="52px" h="52px" />
-            )}
-
-            {/* Tengah agak bawah: buletan putih / centang warna-warni / hilang */}
-            {!decorate && (
-              <Box display="flex" flexDirection="column" alignItems="center" gap={1}>
-                {pendingCheck ? (
-                  <>
-                    <Box
-                      as="button"
-                      aria-label="Sudah siap"
-                      onClick={() => {
-                        setPendingCheck(false);
-                        setDecorate(true);
-                        // Masuk tahap hias → kamera/video dimatikan.
-                        stopStream();
-                      }}
-                      w="76px"
-                      h="76px"
-                      borderRadius="full"
-                      border="4px solid white"
-                      display="flex"
-                      alignItems="center"
-                      justifyContent="center"
-                      cursor="pointer"
-                      bg="linear-gradient(135deg, #f97316, #ec4899, #8b5cf6)"
-                      touchAction="manipulation"
-                      userSelect="none"
-                    >
-                      <Check size={32} color="white" strokeWidth={3} />
-                    </Box>
-                    <Text fontSize="10px" color="whiteAlpha.700" fontWeight="bold">
-                      Ketuk centang jika sudah siap
-                    </Text>
-                  </>
-                ) : (
-                  <>
-                    <Box
-                      as="button"
-                      aria-label={layout === 1 ? "Foto atau tahan untuk video" : "Ambil foto"}
-                      onPointerDown={onShutterDown}
-                      onPointerUp={onShutterUp}
-                      onPointerLeave={() => {
-                        if (recording) stopRecording();
-                        if (pressTimerRef.current) {
-                          clearTimeout(pressTimerRef.current);
-                          pressTimerRef.current = null;
-                        }
-                      }}
-                      onContextMenu={(e) => e.preventDefault()}
-                      w="76px"
-                      h="76px"
-                      borderRadius="full"
-                      border="4px solid white"
-                      display="flex"
-                      alignItems="center"
-                      justifyContent="center"
-                      cursor="pointer"
-                      bg="transparent"
-                      touchAction="none"
-                      userSelect="none"
-                      position="relative"
-                    >
-                      <Box
-                        w="60px"
-                        h="60px"
-                        borderRadius="full"
-                        bg={recording ? "red.500" : "white"}
-                        transition="0.15s"
-                      />
-                    </Box>
-                    <Text fontSize="10px" color="whiteAlpha.700" fontWeight="bold">
-                      {recording
-                        ? `● ${recElapsed}d / 15d`
-                        : layout === 1
-                          ? "Ketuk foto • Tahan video"
-                          : "Ketuk untuk foto"}
-                    </Text>
-                  </>
-                )}
-              </Box>
-            )}
-
-            {/* Kanan: kirim */}
-            <IconButton
-              aria-label="Bagikan story"
-              borderRadius="full"
-              w="52px"
-              h="52px"
-              bg={canSubmit ? "orange.500" : "whiteAlpha.200"}
-              color="white"
-              _hover={{ bg: canSubmit ? "orange.600" : "whiteAlpha.300" }}
-              disabled={!canSubmit}
-              loading={submitting}
-              onClick={handleSubmit}
-            >
-              <Send size={20} />
-            </IconButton>
-          </Flex>
         </Box>
 
-        {/* spacer kanan biar center seimbang di desktop */}
-        <Box w="44px" display={{ base: "none", md: "block" }} />
+        {/* Kanan: penyeimbang biar kotak kamera tetap rata tengah,
+            tulisan Lentera/Story nempel di kiri kamera */}
+        <Box display={{ base: "none", md: "block" }} minW="160px" flexShrink={0} />
       </Flex>
-
-      <CreateTabs active="story" />
 
       <StoryUploadToast />
       {/* audio loop preview setelah centang */}
@@ -2261,14 +2436,14 @@ export default function StoryPage() {
         <Box
           position="fixed"
           inset={0}
-          bg="black"
-          color="white"
+          bg="var(--app-bg)"
+          color="var(--app-text)"
           zIndex={100}
           display="flex"
           alignItems="center"
           justifyContent="center"
         >
-          <Spinner size="lg" color="white" />
+          <Spinner size="lg" color="blue.500" />
         </Box>
       }
     >

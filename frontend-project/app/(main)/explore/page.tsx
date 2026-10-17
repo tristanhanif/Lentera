@@ -189,15 +189,16 @@ function ExploreEmptyWide() {
   );
 }
 
-// Komunitas Populer (real backend): tampilkan komunitas orang lain juga,
-// bukan cuma milik sendiri. Join -> modal konfirmasi -> direct ke chat.
+// Komunitas Populer (real backend): khusus promosi yang BELUM Gabung.
+// Yang sudah Gabung disembunyikan (tidak ditampilkan di kotak ini).
+// Gabung -> modal konfirmasi -> direct ke chat.
 function KomunitasPopulerCard() {
   const router = useRouter();
   const { data, isLoading } = useExploreCommunities();
   const joinMutation = useJoinCommunity();
   const [pending, setPending] = useState<ExploreCommunity | null>(null);
   const [joiningId, setJoiningId] = useState<string | null>(null);
-  const list = (data?.data ?? []).slice(0, 6);
+  const list = (data?.data ?? []).filter((c) => !c.isMember).slice(0, 6);
 
   const handleJoin = (c: ExploreCommunity) => {
     if (c.isMember) {
@@ -268,12 +269,12 @@ function KomunitasPopulerCard() {
                 <Button
                   size="xs"
                   borderRadius="full"
-                  variant={c.isMember ? "ghost" : "outline"}
+                  variant="outline"
                   colorPalette="blue"
                   flexShrink={0}
                   onClick={() => handleJoin(c)}
                 >
-                  {c.isMember ? "Buka" : "Join"}
+                  Gabung
                 </Button>
               </Flex>
             ))}
@@ -333,7 +334,7 @@ function KomunitasPopulerCard() {
                   loading={!!joiningId}
                   onClick={confirmJoin}
                 >
-                  Ya, join
+                  Ya, Gabung
                 </Button>
               </Flex>
             </VStack>
@@ -344,16 +345,19 @@ function KomunitasPopulerCard() {
   );
 }
 
-// Saluran populer (real backend): publik ala WA.
-// - Pencet nama saluran -> preview isi chat dulu (tanpa langsung join),
+// Saluran populer (real backend): khusus promosi yang BELUM Follow.
+// Yang sudah Follow / milik sendiri disembunyikan (tidak ditampilkan di kotak ini).
+// - Pencet nama saluran -> preview isi chat dulu (tanpa langsung follow),
 //   direct ke /messages?channel=:id.
-// - Pencet tombol Join -> langsung gabung lalu direct ke chat salurannya.
+// - Pencet tombol Follow -> langsung gabung lalu direct ke chat salurannya.
 function SaluranPopulerCard() {
   const router = useRouter();
   const { data, isLoading } = useExploreChannels();
   const followMutation = useFollowChannel();
   const [followingId, setFollowingId] = useState<string | null>(null);
-  const list = (data?.data ?? []).slice(0, 6);
+  const list = (data?.data ?? [])
+    .filter((c) => !c.isFollowing && !c.isOwner)
+    .slice(0, 6);
 
   const handleOpenPreview = (c: ExploreChannel) => {
     router.push(`/messages?channel=${encodeURIComponent(c.id)}`);
@@ -432,13 +436,13 @@ function SaluranPopulerCard() {
               <Button
                 size="xs"
                 borderRadius="full"
-                variant={c.isFollowing || c.isOwner ? "ghost" : "outline"}
+                variant="outline"
                 colorPalette="blue"
                 flexShrink={0}
                 loading={followingId === c.id}
                 onClick={() => handleFollow(c)}
               >
-                {c.isFollowing || c.isOwner ? "Buka" : "Join"}
+                Follow
               </Button>
             </Flex>
           ))}

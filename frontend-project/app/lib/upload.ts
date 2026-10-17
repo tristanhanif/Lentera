@@ -63,3 +63,32 @@ export const uploadChatDocument = async (
     size: res.data?.file_size ?? file.size,
   };
 };
+
+// Upload VN (webm/mp4 dari MediaRecorder) ke /upload/file (sama kayak VN saluran).
+// Mengembalikan url file audio untuk disimpan ke pesan chat / saluran.
+export const uploadChatVoice = async (
+  blob: Blob,
+  onProgress?: (percent: number) => void,
+): Promise<string> => {
+  const formData = new FormData();
+  formData.append("file", blob, `vn-${Date.now()}.webm`);
+
+  const res = await api.post<{
+    file_url?: string;
+  }>("/upload/file", formData, {
+    headers: { "Content-Type": "multipart/form-data" },
+    ...(onProgress
+      ? {
+          onUploadProgress: (e: { loaded: number; total?: number }) => {
+            if (e.total) {
+              onProgress(Math.round((e.loaded / e.total) * 100));
+            }
+          },
+        }
+      : {}),
+  });
+
+  const url = res.data?.file_url;
+  if (!url) throw new Error("Gagal mengupload VN");
+  return url;
+};

@@ -11,6 +11,7 @@ import { DataSource, LessThanOrEqual, MoreThan, Repository } from 'typeorm';
 import { v2 as cloudinary } from 'cloudinary';
 import { Story, StoryMedia, StoryView, StoryLike } from '../entity/story.entity';
 import { User } from '../entity/user.entity';
+import { CloseFriend } from '../entity/close-friend.entity';
 import { CreateStoryDto } from './dto/create-story.dto';
 import { CreateStoryCommentDto } from './dto/create-comment.dto';
 import { ChatService } from 'src/chat/chat.service';
@@ -36,6 +37,8 @@ export class StoriesService {
     private readonly viewRepository: Repository<StoryView>,
     @InjectRepository(StoryLike)
     private readonly likeRepository: Repository<StoryLike>,
+    @InjectRepository(CloseFriend)
+    private readonly closeRepo: Repository<CloseFriend>,
     @Inject(REQUEST) private readonly req: any,
     private readonly dataSource: DataSource,
     private readonly chatService: ChatService,
@@ -45,6 +48,21 @@ export class StoriesService {
 
   private get meId(): string | undefined {
     return this.req?.user?.id;
+  }
+
+  // Close Friend ala IG: story audience=close hanya boleh dilihat pemilik
+  // + akun yang terdaftar sebagai teman dekat pemilik (close_friends).
+  private async isCloseAllowed(
+    ownerId: string | undefined,
+    viewerId: string | undefined,
+  ): Promise<boolean> {
+    if (!ownerId) return false;
+    if (viewerId && ownerId === viewerId) return true;
+    if (!viewerId) return false;
+    const row = await this.closeRepo.findOne({
+      where: { ownerId, friendId: viewerId },
+    });
+    return !!row;
   }
 
   private mapStory(story: Story) {
@@ -93,6 +111,7 @@ export class StoriesService {
       type: story.type,
       layout: story.layout,
       caption: story.caption,
+      audience: (story.audience ?? 'public') as 'public' | 'close',
       music: story.musicUrl
         ? {
             url: story.musicUrl,
@@ -208,6 +227,7 @@ export class StoriesService {
         type: dto.type,
         layout,
         caption: dto.caption ?? null,
+        audience: dto.audience ?? 'public',
         musicUrl: dto.music?.url ?? null,
         musicTitle: dto.music?.title ?? null,
         musicArtist: dto.music?.artist ?? null,
@@ -316,6 +336,29 @@ export class StoriesService {
       }
     }
 
+    // Sembunyikan story close-friend dari yang bukan teman dekat pemilik.
+    // Pemilik tetap melihat story close miliknya sendiri.
+    if (meId) {
+      const filtered: Story[] = [];
+      for (const s of visible) {
+        if ((s.audience ?? 'public') !== 'close') {
+          filtered.push(s);
+          continue;
+        }
+        const ownerId = (s.user as User)?.id;
+        if (ownerId === meId) {
+          filtered.push(s);
+          continue;
+        }
+        if (await this.isCloseAllowed(ownerId, meId)) {
+          filtered.push(s);
+        }
+      }
+      visible = filtered;
+    } else {
+      visible = visible.filter((s) => (s.audience ?? 'public') !== 'close');
+    }
+
     return {
       message: 'OK',
       data: visible.map((s) => this.mapStory(s)),
@@ -340,6 +383,12 @@ export class StoriesService {
       (await this.blocksService.isBlockedEitherWay(meId, (story.user as User).id))
     ) {
       throw new NotFoundException('Story tidak ditemukan');
+    }
+    if ((story.audience ?? 'public') === 'close') {
+      const ownerId = (story.user as User)?.id;
+      if (!(await this.isCloseAllowed(ownerId, meId))) {
+        throw new NotFoundException('Story tidak ditemukan');
+      }
     }
     return {
       message: 'OK',
@@ -400,6 +449,12 @@ export class StoriesService {
       (await this.blocksService.isBlockedEitherWay(meId, (story.user as User).id))
     ) {
       throw new NotFoundException('Story tidak ditemukan atau sudah expired');
+    }
+    if ((story.audience ?? 'public') === 'close') {
+      const ownerId = (story.user as User)?.id;
+      if (!(await this.isCloseAllowed(ownerId, meId))) {
+        throw new NotFoundException('Story tidak ditemukan atau sudah expired');
+      }
     }
     return story;
   }

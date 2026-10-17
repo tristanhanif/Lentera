@@ -30,6 +30,8 @@ import {
   CheckCheck,
   Check,
   Play,
+  Pause,
+  Mic,
   Image as ImageIcon,
   FileText,
   Paintbrush,
@@ -64,8 +66,38 @@ import {
   POST_SHARE_DEFAULT_TEXT,
   FILE_SHARE_DEFAULT_TEXT,
   IMAGE_SHARE_DEFAULT_TEXT,
+  VOICE_SHARE_DEFAULT_TEXT,
 } from "./chat.interface";
-import { uploadToCloudinary, uploadChatDocument } from "@/app/lib/upload";
+import { uploadToCloudinary, uploadChatDocument, uploadChatVoice } from "@/app/lib/upload";
+import NoteReplyPreview from "./components/NoteReplyPreview";
+import PostSharePreview from "./components/PostSharePreview";
+import FileAttachmentPreview from "./components/FileAttachmentPreview";
+import MessageMenu, { type MenuPosition } from "./components/MessageMenu";
+import DMVoiceBubble from "./components/DMVoiceBubble";
+import DMVoiceRecorder from "./components/DMVoiceRecorder";
+import NotesRail from "./components/NotesRail";
+import ConversationSidebar from "./components/ConversationSidebar";
+import {
+  parseAsUTC,
+  formatWIBTime,
+  formatReadAt,
+  getWIBDayKey,
+  getWIBDayStartUTC,
+  formatDateSeparator,
+  wibDayFormatter,
+} from "./utils/chat-time";
+import {
+  PIN_DURATIONS,
+  CHAT_EMOJIS,
+  formatFileSize,
+  getFileExt,
+  isHiddenShareText,
+  voicePreviewLabel,
+  isNoteReplyExpired,
+  getFindMatchInfo,
+  formatBadge4,
+} from "./utils/chat-helpers";
+import { MAX_DM_VN_SECS } from "./utils/dm-voice";
 import { MusicPlayingIcon } from "./NotesBar";
 import NoteEditor from "./NoteEditor";
 import TeraChatView from "./TeraChatView";
@@ -88,6 +120,8 @@ import {
   useSendBackendCommunityMessage,
   useAddBackendCommunityMembers,
   useClearBackendCommunityChat,
+  useExploreCommunities,
+  useJoinCommunity,
   useLeaveBackendCommunity,
   useMarkCommunityRead,
   usePromoteCommunityAdmin,
@@ -100,11 +134,13 @@ import {
   useBackendChannelMessages,
   useBackendChannels,
   useCreateBackendChannel,
+  useExploreChannels,
   useFollowChannel,
   useMarkChannelRead,
   useSendBackendChannelText,
   useSendBackendChannelVoice,
   useUnfollowChannel,
+  useUpdateBackendChannel,
 } from "./channel.service";
 import {
   CHAT_THEMES,
@@ -126,738 +162,8 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import Cookies from "js-cookie";
 
-const PIN_DURATIONS = [
-  { label: "15 Menit", minutes: 15 },
-  { label: "30 Menit", minutes: 30 },
-  { label: "1 Jam", minutes: 60 },
-  { label: "1 Hari", minutes: 60 * 24 },
-  { label: "7 Hari", minutes: 60 * 24 * 7 },
-];
-
-// Semua waktu chat disimpan backend dalam UTC (MySQL Docker default UTC,
-// kolom datetime dikirim tanpa info timezone, mis. "2026-09-20 02:10:00").
-// Normalisasi: string tanpa Z/offset dianggap UTC, lalu tampilkan di WIB
-// supaya tidak ikut timezone laptop/browser.
-const parseAsUTC = (dateStr: string) => {
-  if (/[Zz]$/.test(dateStr) || /[+-]\d{2}:?\d{2}$/.test(dateStr)) {
-    return new Date(dateStr);
-  }
-  return new Date(dateStr.replace(" ", "T") + "Z");
-};
-
-const formatWIBTime = (dateStr: string) =>
-  parseAsUTC(dateStr).toLocaleTimeString("id-ID", {
-    hour: "2-digit",
-    minute: "2-digit",
-    timeZone: "Asia/Jakarta",
-  });
-
-// "Dilihat • 5 mnt lalu" ala IG, dalam Bahasa Indonesia.
-const formatReadAt = (readAt: string, nowMs: number) => {
-  const diff = nowMs - parseAsUTC(readAt).getTime();
-  const minutes = Math.floor(diff / 60000);
-  if (minutes < 1) return "baru saja";
-  if (minutes < 60) return `${minutes} mnt lalu`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours} jam lalu`;
-  const days = Math.floor(hours / 24);
-  if (days < 7) return `${days} hari lalu`;
-  return parseAsUTC(readAt).toLocaleDateString("id-ID", {
-    day: "numeric",
-    month: "short",
-    timeZone: "Asia/Jakarta",
-  });
-};
-
-// Separator tanggal ala WA/IG di tengah percakapan.
-// WIB day-key "YYYY-MM-DD" supaya pengelompokan ikut jam Jakarta,
-// bukan timezone laptop/browser.
-const wibDayFormatter = new Intl.DateTimeFormat("en-CA", {
-  timeZone: "Asia/Jakarta",
-  year: "numeric",
-  month: "2-digit",
-  day: "2-digit",
-});
-
-const getWIBDayKey = (dateStr: string) => {
-  try {
-    return wibDayFormatter.format(parseAsUTC(dateStr));
-  } catch {
-    return dateStr.slice(0, 10);
-  }
-};
-
-const getWIBDayStartUTC = (dateStrOrDate: string | Date) => {
-  const d =
-    typeof dateStrOrDate === "string"
-      ? parseAsUTC(dateStrOrDate)
-      : dateStrOrDate;
-  const parts = wibDayFormatter.formatToParts(d);
-  const get = (type: string) =>
-    parts.find((p) => p.type === type)?.value ?? "";
-  const y = Number(get("year"));
-  const m = Number(get("month"));
-  const day = Number(get("day"));
-  if (!y || !m || !day) return NaN;
-  return Date.UTC(y, m - 1, day);
-};
-
-// Label separator:
-// - Hari yang sama -> "Hari Ini"
-// - Selisih 1 hari kalender WIB -> "Kemarin"
-// - < 7 hari -> nama hari ("Senin", "Selasa", ...)
-// - >= 7 hari -> "20/09/2026"
-const formatDateSeparator = (dateStr: string, nowMs: number = Date.now()) => {
-  const msgStart = getWIBDayStartUTC(dateStr);
-  const nowStart = getWIBDayStartUTC(new Date(nowMs));
-  if (!Number.isNaN(msgStart) && !Number.isNaN(nowStart)) {
-    const diffDays = Math.round((nowStart - msgStart) / 86400000);
-    if (diffDays <= 0) return "Hari Ini";
-    if (diffDays === 1) return "Kemarin";
-    if (diffDays < 7) {
-      const weekday = parseAsUTC(dateStr).toLocaleDateString("id-ID", {
-        weekday: "long",
-        timeZone: "Asia/Jakarta",
-      });
-      return weekday.charAt(0).toUpperCase() + weekday.slice(1);
-    }
-  }
-  try {
-    const parts = wibDayFormatter.formatToParts(parseAsUTC(dateStr));
-    const get = (type: string) =>
-      parts.find((p) => p.type === type)?.value ?? "";
-    const dd = get("day").padStart(2, "0");
-    const mm = get("month").padStart(2, "0");
-    const yyyy = get("year");
-    if (dd && mm && yyyy) return `${dd}/${mm}/${yyyy}`;
-  } catch {
-    // fallback ke toLocaleDateString di bawah
-  }
-  return parseAsUTC(dateStr).toLocaleDateString("en-GB", {
-    day: "2-digit",
-    month: "2-digit",
-    year: "numeric",
-    timeZone: "Asia/Jakarta",
-  });
-};
-
-// Balasan catatan: cek kedaluwarsa dari snapshot noteExpiresAt.
-// Kalau sudah lewat -> tampilkan "Catatan sudah tidak tersedia".
-const isNoteReplyExpired = (msg: ChatMessage) => {
-  if (!msg.noteId) return false;
-  if (!msg.noteExpiresAt) return true;
-  try {
-    return parseAsUTC(msg.noteExpiresAt).getTime() <= Date.now();
-  } catch {
-    return true;
-  }
-};
-
-function NoteReplyPreview({
-  msg,
-  isMe,
-}: {
-  msg: ChatMessage;
-  isMe: boolean;
-}) {
-  const expired = isNoteReplyExpired(msg);
-  if (expired) {
-    return (
-      <VStack align={isMe ? "end" : "start"} gap={1} mb={1}>
-        <Text fontSize="xs" fontStyle="italic" color="var(--app-muted)">
-          Catatan sudah tidak tersedia
-        </Text>
-      </VStack>
-    );
-  }
-  const isMusic = msg.noteType === "music";
-  return (
-    <VStack align={isMe ? "end" : "start"} gap={0} mb={1}>
-      {/* Kolom tengah: bubble persis di atas avatar */}
-      <Flex direction="column" align="center" gap={0}>
-        {/* Kotak catatan di atas avatar */}
-        <Box position="relative" mb="8px" display="flex" justifyContent="center">
-          <Box
-            bg="var(--app-subtle)"
-            color="blue.900"
-            px={3}
-            py={2}
-            borderRadius="xl"
-            maxW="160px"
-            minW="64px"
-            textAlign="center"
-            shadow="sm"
-            overflow="hidden"
-          >
-            {isMusic ? (
-              <Flex align="center" gap={1.5} justify="center">
-                <Box flexShrink={0} display="flex" alignItems="center">
-                  <MusicPlayingIcon />
-                </Box>
-                <Box textAlign="left" overflow="hidden">
-                  <Text
-                    fontSize="11px"
-                    fontWeight="bold"
-                    lineHeight="1.2"
-                    overflow="hidden"
-                    textOverflow="ellipsis"
-                    whiteSpace="nowrap"
-                    maxW="110px"
-                  >
-                    {msg.noteMusicTitle || msg.noteText}
-                  </Text>
-                  {msg.noteMusicArtist && (
-                    <Text
-                      fontSize="10px"
-                      opacity={0.85}
-                      lineHeight="1.2"
-                      overflow="hidden"
-                      textOverflow="ellipsis"
-                      whiteSpace="nowrap"
-                      maxW="110px"
-                    >
-                      {msg.noteMusicArtist}
-                    </Text>
-                  )}
-                </Box>
-              </Flex>
-            ) : (
-              <Text
-                fontSize="11px"
-                fontWeight="medium"
-                lineHeight="1.3"
-                display="-webkit-box"
-                css={{
-                  WebkitLineClamp: 2,
-                  WebkitBoxOrient: "vertical",
-                  overflow: "hidden",
-                }}
-              >
-                {msg.noteText}
-              </Text>
-            )}
-          </Box>
-          <Box
-            position="absolute"
-            bottom="-4px"
-            left="50%"
-            transform="translateX(-50%) rotate(45deg)"
-            w="10px"
-            h="10px"
-            bg="var(--app-subtle)"
-          />
-        </Box>
-        {/* PP avatar tepat di bawah kotak catatan */}
-        <Avatar style={{ width: "40px", height: "40px" }}>
-          <AvatarImage
-            src={msg.noteOwnerAvatar || "/default-avatar.jpg"}
-            alt={msg.noteOwnerUsername ?? "catatan"}
-          />
-          <AvatarFallback>
-            {(msg.noteOwnerUsername ?? "C").charAt(0).toUpperCase()}
-          </AvatarFallback>
-        </Avatar>
-      </Flex>
-    </VStack>
-  );
-}
-
-// Kotak postingan yang dibagikan ke chat (ala IG).
-// - Video: satu kotak media saja — kiri atas overlay pp avatar + username,
-//   kanan atas ikon play.
-// - Gambar: 2 kotak menempel — kotak atas media (overlay avatar+username
-//   kiri atas; kanan atas ikon bertumpuk bila >1 gambar / galeri bila 1),
-//   kotak bawah username + deskripsi di sebelahnya (maksimal 2 baris,
-//   kelebihan jadi "...").
-// - Ukuran media mengikuti frame asli (1:1, 4:5, 16:9, dst): rasio
-//   dideteksi saat media selesai dimuat (pola sama dengan PostCard).
-// Pencet kotaknya -> buka kotak besar postingan.
-function PostSharePreview({
-  msg,
-  isMe,
-  onOpen,
-}: {
-  msg: ChatMessage;
-  isMe: boolean;
-  onOpen: (postId: string) => void;
-}) {
-  const isVideo = msg.postMediaType === "video";
-  const multi = (msg.postMediaCount ?? 1) > 1;
-  // Rasio frame asli media, dideteksi saat load (fallback 4:5 seperti PostCard).
-  const [mediaAspect, setMediaAspect] = useState("4 / 5");
-  return (
-    <VStack align={isMe ? "end" : "start"} gap={1} mb={1}>
-      <Box
-        w="220px"
-        bg="var(--app-card)"
-        borderRadius="xl"
-        border="1px solid"
-        borderColor="var(--app-border)"
-        overflow="hidden"
-        shadow="sm"
-        cursor="pointer"
-        onClick={() => {
-          if (msg.postId) onOpen(msg.postId);
-        }}
-      >
-        {/* Fallback gambar tanpa media: avatar+username ala baris biasa */}
-        {!isVideo && !msg.postMediaUrl && (
-          <HStack gap={2} p={2.5}>
-            <Box
-              w="28px"
-              h="28px"
-              borderRadius="full"
-              overflow="hidden"
-              bg="var(--app-subtle)"
-              flexShrink={0}
-            >
-              <Image
-                src={msg.postOwnerAvatar || "/default-avatar.jpg"}
-                alt={msg.postOwnerUsername ?? "postingan"}
-                w="full"
-                h="full"
-                objectFit="cover"
-              />
-            </Box>
-            <Text fontSize="xs" fontWeight="bold" color="var(--app-text)" truncate>
-              {msg.postOwnerUsername ?? "Postingan"}
-            </Text>
-          </HStack>
-        )}
-        {/* Media: kotak mengikuti frame asli (1:1 / 4:5 / 16:9 / asli).
-            Semua elemen menyatu di kotak media: overlay avatar+username
-            kiri atas, ikon jenis media kanan atas. Tanpa header terpisah. */}
-        {msg.postMediaUrl && (
-          <Box
-            position="relative"
-            bg="var(--app-input)"
-            style={{ aspectRatio: mediaAspect }}
-          >
-            {isVideo ? (
-              <video
-                src={msg.postMediaUrl}
-                muted
-                playsInline
-                preload="metadata"
-                onLoadedMetadata={(e) => {
-                  const v = e.currentTarget;
-                  const w = v.videoWidth;
-                  const h = v.videoHeight;
-                  if (w && h) setMediaAspect(`${w} / ${h}`);
-                }}
-                style={{
-                  width: "100%",
-                  height: "100%",
-                  objectFit: "cover",
-                  display: "block",
-                }}
-              />
-            ) : (
-              <Image
-                src={msg.postMediaUrl}
-                alt="Postingan yang dibagikan"
-                w="full"
-                h="full"
-                objectFit="cover"
-                display="block"
-                onLoad={(e) => {
-                  const img = e.currentTarget;
-                  const w = img.naturalWidth;
-                  const h = img.naturalHeight;
-                  if (w && h) setMediaAspect(`${w} / ${h}`);
-                }}
-              />
-            )}
-            {/* Gradasi tipis di atas biar overlay putih tetap terbaca */}
-            <Box
-              position="absolute"
-              top={0}
-              left={0}
-              right={0}
-              h="52px"
-              pointerEvents="none"
-              background="linear-gradient(to bottom, rgba(0,0,0,0.45), rgba(0,0,0,0))"
-            />
-            {/* Kiri atas: pp avatar + username pemilik postingan */}
-            <HStack position="absolute" left={2} top={2} gap={1.5} maxW="75%">
-              <Box
-                w="22px"
-                h="22px"
-                borderRadius="full"
-                overflow="hidden"
-                border="1.5px solid white"
-                flexShrink={0}
-                style={{ boxShadow: "0 1px 3px rgba(0,0,0,0.5)" }}
-              >
-                <Image
-                  src={msg.postOwnerAvatar || "/default-avatar.jpg"}
-                  alt={msg.postOwnerUsername ?? "postingan"}
-                  w="full"
-                  h="full"
-                  objectFit="cover"
-                />
-              </Box>
-              <Text
-                fontSize="xs"
-                fontWeight="bold"
-                color="white"
-                truncate
-                style={{ filter: "drop-shadow(0 1px 2px rgba(0,0,0,0.8))" }}
-              >
-                {msg.postOwnerUsername ?? "Postingan"}
-              </Text>
-            </HStack>
-            {/* Kanan atas: ikon jenis media (play / bertumpuk / galeri) */}
-            <Box
-              position="absolute"
-              right={2}
-              top={2}
-              color="white"
-              display="flex"
-              alignItems="center"
-              justifyContent="center"
-              style={{ filter: "drop-shadow(0 1px 3px rgba(0,0,0,0.7))" }}
-            >
-              {isVideo ? (
-                <Play size={18} fill="white" />
-              ) : multi ? (
-                <Copy size={18} />
-              ) : (
-                <ImageIcon size={18} />
-              )}
-            </Box>
-          </Box>
-        )}
-        {/* Kotak bawah (menempel di bawah media): username kiri + deskripsi
-            di sebelahnya (maksimal 2 baris, kelebihan jadi "..."). */}
-        {!isVideo && (
-          <HStack
-            px={2.5}
-            py={2}
-            gap={2}
-            align="center"
-            borderTop="1px solid"
-            borderColor="var(--app-subtle)"
-          >
-            <Text fontSize="xs" fontWeight="bold" color="var(--app-text)" flexShrink={0}>
-              {msg.postOwnerUsername ?? "Postingan"}
-            </Text>
-            {!!msg.postContent?.trim() && (
-              <Text
-                fontSize="xs"
-                color="var(--app-secondary)"
-                flex={1}
-                minW={0}
-                lineClamp={2}
-              >
-                {msg.postContent}
-              </Text>
-            )}
-          </HStack>
-        )}
-      </Box>
-    </VStack>
-  );
-}
-
-// Daftar emoji chat: sama seperti di komentar postingan.
-const CHAT_EMOJIS: string[] = [
-  "😀", "😁", "😂", "🤣", "😊", "😍", "😘", "🥰",
-  "😎", "🤔", "😐", "🙄", "😴", "😷", "🤯", "🥳",
-  "😭", "😡", "👍", "👎", "🙏", "👏", "💪", "✌️",
-  "👀", "🙌", "🔥", "⭐", "🎉", "❤️", "💙", "💔",
-];
-
-// Ukuran file -> "800 KB" / "2,5 MB".
-const formatFileSize = (bytes: number | null | undefined) => {
-  if (!bytes || bytes <= 0) return "";
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
-  const mb = bytes / (1024 * 1024);
-  return `${mb.toFixed(mb >= 10 ? 0 : 1).replace(".", ",")} MB`;
-};
-
-const getFileExt = (name: string) =>
-  name.split(".").pop()?.toLowerCase() ?? "";
-
 // Kotak animasi (menu header): pola yang sama seperti di /story.
 const MotionBox = motion.create(Box);
-// Teks default yang bubble-nya disembunyikan (hanya kotak yang tampil).
-// Find TIDAK mencari teks ini karena tidak terlihat di kotak pesan.
-const isHiddenShareText = (text: string) =>
-  text === POST_SHARE_DEFAULT_TEXT ||
-  text === FILE_SHARE_DEFAULT_TEXT ||
-  text === IMAGE_SHARE_DEFAULT_TEXT;
-
-// Aturan Find: hanya kotak pesan teks (bubble) + nama file dokumen.
-// - Postingan gambar/video: owner/content TIDAK ikut (mis. cari "r"
-//   tidak cocok hanya karena nama pemilik ada "r").
-// - Gambar: nama file TIDAK ikut.
-// - Dokumen: nama file ikut.
-// - Story/note/reply metadata: TIDAK ikut.
-const getFindMatchInfo = (msg: ChatMessage, qLower: string) => {
-  if (!qLower || msg.isEvent || msg.isDeleted) {
-    return { textMatch: false, docMatch: false, matched: false };
-  }
-  const textMatch =
-    !isHiddenShareText(msg.text) && msg.text.toLowerCase().includes(qLower);
-  const isDocument = !!msg.fileUrl && msg.fileType !== "image";
-  const docMatch =
-    isDocument && !!msg.fileName && msg.fileName.toLowerCase().includes(qLower);
-  return { textMatch, docMatch, matched: textMatch || docMatch };
-};
-
-// Highlight potongan nama file dokumen (kuning / oranye aktif).
-function renderFoundFileName(
-  fileName: string,
-  query: string,
-  isActive: boolean,
-) {
-  const q = query.trim();
-  if (!q) return fileName;
-  const lowerName = fileName.toLowerCase();
-  const lowerQ = q.toLowerCase();
-  if (!lowerName.includes(lowerQ)) return fileName;
-  const parts: React.ReactNode[] = [];
-  let i = 0;
-  let key = 0;
-  while (i < fileName.length) {
-    const idx = lowerName.indexOf(lowerQ, i);
-    if (idx === -1) {
-      parts.push(fileName.slice(i));
-      break;
-    }
-    if (idx > i) parts.push(fileName.slice(i, idx));
-    parts.push(
-      <Box
-        key={`findfile-${key++}`}
-        as="span"
-        bg={isActive ? "orange.300" : "yellow.200"}
-        color="black"
-        px="1px"
-        borderRadius="sm"
-      >
-        {fileName.slice(idx, idx + q.length)}
-      </Box>,
-    );
-    i = idx + q.length;
-  }
-  return <>{parts}</>;
-}
-
-// Kotak lampiran di dalam percakapan (di luar bubble teks).
-// - Gambar: tampil sebagai gambar (pencet untuk buka penuh).
-//   Find mengabaikan gambar sepenuhnya.
-// - Dokumen: kartu berisi icon + nama + ukuran (pencet untuk buka/unduh).
-//   Find mencocokkan nama file dokumen saja.
-function FileAttachmentPreview({
-  msg,
-  isMe,
-  findQuery = "",
-  isActiveFind = false,
-}: {
-  msg: ChatMessage;
-  isMe: boolean;
-  findQuery?: string;
-  isActiveFind?: boolean;
-}) {
-  if (!msg.fileUrl || msg.isDeleted) return null;
-  const isImage = msg.fileType === "image";
-  if (isImage) {
-    return (
-      <VStack align={isMe ? "end" : "start"} gap={1} mb={1}>
-        <Box
-          w="220px"
-          borderRadius="xl"
-          overflow="hidden"
-          border="1px solid"
-          borderColor="var(--app-border)"
-          shadow="sm"
-          cursor="pointer"
-          onClick={() => {
-            if (msg.fileUrl) window.open(msg.fileUrl, "_blank");
-          }}
-        >
-          <Image
-            src={msg.fileUrl}
-            alt={msg.fileName || "Gambar"}
-            w="full"
-            maxH="260px"
-            objectFit="cover"
-            display="block"
-          />
-        </Box>
-      </VStack>
-    );
-  }
-  const docName = msg.fileName || "Dokumen";
-  const docQuery = findQuery.trim();
-  const docHit =
-    !!docQuery &&
-    docName.toLowerCase().includes(docQuery.toLowerCase());
-  return (
-    <VStack align={isMe ? "end" : "start"} gap={1} mb={1}>
-      <HStack
-        w="250px"
-        bg={isActiveFind ? "orange.100" : "var(--app-card)"}
-        border={isActiveFind ? "2px solid" : "1px solid"}
-        borderColor={isActiveFind ? "orange.500" : "var(--app-border)"}
-        borderRadius="xl"
-        p={3}
-        gap={3}
-        shadow={isActiveFind ? "md" : "sm"}
-        cursor="pointer"
-        onClick={() => {
-          if (msg.fileUrl) window.open(msg.fileUrl, "_blank");
-        }}
-      >
-        <Box
-          w="40px"
-          h="40px"
-          borderRadius="lg"
-          bg="var(--app-hover)"
-          display="flex"
-          alignItems="center"
-          justifyContent="center"
-          flexShrink={0}
-        >
-          <FileText size={20} color="#2563eb" />
-        </Box>
-        <VStack align="start" gap={0} flex={1} minW={0}>
-          <Text
-            fontSize="xs"
-            fontWeight="bold"
-            color={isActiveFind ? "black" : "var(--app-text)"}
-            overflow="hidden"
-            textOverflow="ellipsis"
-            whiteSpace="nowrap"
-            maxW="full"
-          >
-            {docHit
-              ? renderFoundFileName(docName, docQuery, isActiveFind)
-              : docName}
-          </Text>
-          <Text fontSize="11px" color="var(--app-muted)">
-            {[msg.fileType?.toUpperCase(), formatFileSize(msg.fileSize)]
-              .filter(Boolean)
-              .join(" • ")}
-          </Text>
-        </VStack>
-      </HStack>
-    </VStack>
-  );
-}
-
-interface MenuPosition {
-  top?: number;
-  bottom?: number;
-  left?: number;
-  right?: number;
-}
-interface MessageMenuProps {
-  msg: ChatMessage;
-  isMe: boolean;
-  isPinned: boolean;
-  pinMode: boolean;
-  menuPos: MenuPosition;
-  onUnsend: () => void;
-  onStar: () => void;
-  onPin: (minutes: number) => void;
-  onUnpin: () => void;
-  onOpenPinMode: () => void;
-  onCopy: () => void;
-  onClose: () => void;
-}
-
-function MessageMenu({
-  msg,
-  isMe,
-  isPinned,
-  pinMode,
-  menuPos,
-  onUnsend,
-  onStar,
-  onPin,
-  onUnpin,
-  onOpenPinMode,
-  onCopy,
-}: MessageMenuProps) {
-  const menuItem = (
-    label: string,
-    Icon: typeof Star,
-    onClick: () => void,
-    isDanger?: boolean,
-  ) => (
-    <Flex
-      px={4}
-      py={2.5}
-      gap={3}
-      align="center"
-      justify="space-between"
-      cursor="pointer"
-      color={isDanger ? "red.500" : "var(--app-text)"}
-      _hover={{ bg: isDanger ? "rgba(244, 63, 94, 0.12)" : "var(--app-hover)" }}
-      transition="0.15s"
-      onClick={onClick}
-    >
-      <Text fontSize="sm" fontWeight={isDanger ? "bold" : "medium"}>
-        {label}
-      </Text>
-      <Icon size={16} color={isDanger ? "#f43f5e" : "currentColor"} />
-    </Flex>
-  );
-
-  return (
-    <Box
-      position="fixed"
-      {...menuPos}
-      bg="var(--app-card)"
-      borderRadius="xl"
-      shadow="lg"
-      border="1px solid"
-      borderColor="var(--app-border)"
-      minW="190px"
-      py={2}
-      zIndex={30}
-    >
-      {pinMode ? (
-        <>
-          <Text
-            px={4}
-            pt={1}
-            pb={2}
-            fontSize="xs"
-            fontWeight="bold"
-            color="var(--app-muted)"
-          >
-            Sematkan selama...
-          </Text>
-          {PIN_DURATIONS.map((d) =>
-            menuItem(d.label, Pin, () => onPin(d.minutes)),
-          )}
-        </>
-      ) : (
-        <>
-          {isMe &&
-            !msg.isDeleted &&
-            menuItem("Batal Kirim", Undo2, onUnsend, true)}
-          {!msg.isDeleted &&
-            menuItem(
-              msg.isStarred ? "Hapus Bintang" : "Pesan Berbintang",
-              Star,
-              onStar,
-            )}
-          {!msg.isDeleted &&
-            (isPinned
-              ? menuItem("Batal Sematkan", PinOff, onUnpin)
-              : menuItem("Sematkan", Pin, onOpenPinMode))}
-          {menuItem("Salin", Copy, onCopy)}
-        </>
-      )}
-    </Box>
-  );
-}
-
 function MessagesPage() {
   const [selectedConversation, setSelectedConversation] = useState<string | null>(null);
   const [ownNoteView, setOwnNoteView] = useState<null | "detail" | "editor">(null);
@@ -885,6 +191,15 @@ function MessagesPage() {
   // Saluran (backend beneran, mirip komunitas): buat + daftar + chat.
   const [channelCreateOpen, setChannelCreateOpen] = useState(false);
   const [selectedChannelId, setSelectedChannelId] = useState<string | null>(null);
+  // Garis panjang Komunitas & Saluran (antara yang sudah Gabung/Follow
+  // vs Populer) bisa digeser atas-bawah ala sash VS Code Extensions.
+  // Batas: paling atas = 2 ter-Gabung/Follow terlihat,
+  // paling bawah = 4 ter-Gabung/Follow terlihat.
+  const COMMUNITY_ITEM_H = 80;
+  const COMMUNITY_MIN_H = COMMUNITY_ITEM_H * 2;
+  const COMMUNITY_MAX_H = COMMUNITY_ITEM_H * 4;
+  const [joinedPaneH, setJoinedPaneH] = useState(COMMUNITY_ITEM_H * 3);
+  const sashDragRef = useRef<{ startY: number; startH: number } | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const currentUserId = Cookies.get("uuid") || "";
   const queryClient = useQueryClient();
@@ -893,6 +208,9 @@ function MessagesPage() {
   // Baru dibuat via backend; yang lokal lama tetap tampil biar tidak hilang.
   const { data: backendCommunitiesData } = useBackendCommunities(!!currentUserId);
   const backendCommunities = backendCommunitiesData?.data ?? [];
+  const { data: exploreCommunitiesData } = useExploreCommunities(!!currentUserId);
+  const exploreCommunities = exploreCommunitiesData?.data ?? [];
+  const joinCommunityMutation = useJoinCommunity();
   const isBackendCommunityId = (id: string | null) =>
     !!id && !id.startsWith("local-");
   const selectedBackendId =
@@ -920,7 +238,7 @@ function MessagesPage() {
   const markCommunityReadMutation = useMarkCommunityRead(selectedBackendId ?? "");
   // Badge merah: angka >4 jadi "4+". Filter = jumlah komunitas yang belum dibaca,
   // list = jumlah pesan yang belum dibaca per komunitas.
-  const formatBadge4 = (n: number) => (n > 4 ? "4+" : `${n}`);
+  // formatBadge4 pindah ke utils/chat-helpers
   const unreadCommunityCount = backendCommunities.filter(
     (c) => (c.unreadCount ?? 0) > 0,
   ).length;
@@ -931,6 +249,8 @@ function MessagesPage() {
   // detail publik (/channels/:id) + messages publik, lalu Join dari header.
   const { data: backendChannelsData } = useBackendChannels(!!currentUserId);
   const backendChannels = backendChannelsData?.data ?? [];
+  const { data: exploreChannelsData } = useExploreChannels(!!currentUserId);
+  const exploreChannels = exploreChannelsData?.data ?? [];
   const { data: backendChannelMessagesData } = useBackendChannelMessages(selectedChannelId);
   const mySelectedChannel = backendChannels.find((c) => c.id === selectedChannelId) ?? null;
   const needPreviewDetail = !!selectedChannelId && !mySelectedChannel;
@@ -943,13 +263,23 @@ function MessagesPage() {
   const markChannelReadMutation = useMarkChannelRead(selectedChannelId ?? "");
   const unfollowChannelMutation = useUnfollowChannel();
   const followChannelMutation = useFollowChannel();
+  const updateChannelMutation = useUpdateBackendChannel(selectedChannelId ?? "");
   const [sendingVoice, setSendingVoice] = useState(false);
   const [joiningChannel, setJoiningChannel] = useState(false);
   const unreadChannelCount = backendChannels.filter((c) => (c.unreadCount ?? 0) > 0).length;
   const activeChannelUnreadCount = backendChannelMessagesData?.data?.unreadCount ?? 0;
   const activeChannelFirstUnreadId = backendChannelMessagesData?.data?.firstUnreadId ?? null;
   const selectedChannel = mySelectedChannel
-    ?? (previewChannel
+    ? {
+      id: mySelectedChannel.id,
+      name: mySelectedChannel.name,
+      description: mySelectedChannel.description,
+      avatarUrl: mySelectedChannel.avatarUrl,
+      ownerId: mySelectedChannel.ownerId,
+      followerCount: mySelectedChannel.followerCount,
+      createdAt: mySelectedChannel.createdAt,
+    }
+    : (previewChannel
       ? {
         id: previewChannel.id,
         name: previewChannel.name,
@@ -957,9 +287,10 @@ function MessagesPage() {
         avatarUrl: previewChannel.avatarUrl,
         ownerId: previewChannel.ownerId,
         followerCount: previewChannel.followerCount,
-        isPreviewOwner: previewChannel.isOwner,
+        createdAt: previewChannel.createdAt,
       }
       : null);
+  const selectedChannelIsFollowing = !!mySelectedChannel || (previewChannel?.isFollowing ?? false);
   const selectedChannelIsOwner = mySelectedChannel
     ? mySelectedChannel.ownerId === currentUserId
     : (previewChannel?.isOwner ?? false);
@@ -1099,6 +430,10 @@ function MessagesPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const attachmentSeq = useRef(0);
+  // VN DM (ala saluran): mode rekaman + id VN yang lagi diputar + status kirim.
+  const [dmRecording, setDmRecording] = useState(false);
+  const [dmPlayingId, setDmPlayingId] = useState<string | null>(null);
+  const [dmSendingVoice, setDmSendingVoice] = useState(false);
   // Kotak postingan di chat dipencet -> ambil detail + buka kotak besar.
   const [sharedPostId, setSharedPostId] = useState<string | null>(null);
   const {
@@ -1169,6 +504,10 @@ function MessagesPage() {
   };
 
   const handleCopy = (msg: ChatMessage) => {
+    if (msg.audioUrl) {
+      closeMenu();
+      return;
+    }
     navigator.clipboard.writeText(msg.text);
     closeMenu();
   };
@@ -1227,6 +566,14 @@ function MessagesPage() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, isFinding]);
 
+  // Ganti obrolan dari jalur mana pun (klik list, balas catatan, deep-link):
+  // hentikan mode rekaman VN DM + putar VN biar tidak nyangkut di obrolan lama.
+  useEffect(() => {
+    setDmRecording(false);
+    setDmPlayingId(null);
+    setDmSendingVoice(false);
+  }, [selectedConversation]);
+
   // Membuka obrolan = membaca pesan. GET messages sudah menandai isRead=true
   // di server, jadi refresh daftar percakapan supaya badge merah ikut hilang.
   useEffect(() => {
@@ -1255,6 +602,9 @@ function MessagesPage() {
     setReplyTo(null);
     setAttachment(null);
     setEmojiOpen(false);
+    setDmRecording(false);
+    setDmPlayingId(null);
+    setDmSendingVoice(false);
     // Ganti obrolan -> keluar dari mode Find + Theme.
     setIsFinding(false);
     setFindQuery("");
@@ -1616,6 +966,7 @@ function MessagesPage() {
 
   const handleSendMessage = async () => {
     if (!selectedConversation || sendMessageMutation.isPending) return;
+    if (dmRecording || dmSendingVoice) return;
     const text = messageText.trim();
     const att = attachment?.ready && attachment.uploadedUrl ? attachment : null;
     if (!text && !att) return;
@@ -1651,6 +1002,35 @@ function MessagesPage() {
         (err as { response?: { data?: { message?: string } } })?.response
           ?.data?.message || "Gagal mengirim pesan";
       Swal.fire({ title: "Gagal", text: msg, icon: "error", timer: 2000, showConfirmButton: false });
+    }
+  };
+
+  // Kirim VN DM: upload dulu ke /upload/file, lalu kirim audioUrl + durasi.
+  // Alur sama kayak owner saluran kirim VN.
+  const handleSendDmVoice = async (blob: Blob, secs: number) => {
+    if (!selectedConversation || dmSendingVoice) return;
+    const replyId = replyTo?.id ?? null;
+    setDmRecording(false);
+    setDmSendingVoice(true);
+    try {
+      const url = await uploadChatVoice(blob);
+      await sendMessageMutation.mutateAsync({
+        conversationId: selectedConversation,
+        text: VOICE_SHARE_DEFAULT_TEXT,
+        replyToId: replyId,
+        audioUrl: url,
+        voiceDuration: Math.min(Math.max(1, Math.round(secs)), MAX_DM_VN_SECS),
+      });
+      setReplyTo(null);
+      setEmojiOpen(false);
+    } catch (err: unknown) {
+      const msg =
+        (err as Error)?.message ||
+        (err as { response?: { data?: { message?: string } } })?.response?.data?.message ||
+        "Gagal mengirim VN";
+      Swal.fire({ title: "Gagal", text: msg, icon: "error", timer: 2200, showConfirmButton: false });
+    } finally {
+      setDmSendingVoice(false);
     }
   };
 
@@ -1828,659 +1208,128 @@ function MessagesPage() {
       overflow="hidden"
     >
       <HStack h="full" gap={0} align="stretch">
-        {/* KIRI: REL AKUN CATATAN (vertikal, avatar + @username ke bawah).
-            Paling atas avatar sendiri + buletan biru icon tambah.
-            Lihat isi Catatan tiap akun dibahas menyusul. */}
-        <VStack
-          w="150px"
-          flexShrink={0}
-          borderRight="2px solid"
-          borderColor="var(--app-hover)"
-          align="stretch"
-          gap={0}
-          py={4}
-          px={2}
-          overflowY="auto"
-          css={{
-            "&::-webkit-scrollbar": { width: "4px" },
-            "&::-webkit-scrollbar-thumb": {
-              background: "#cbd5e1",
-              borderRadius: "10px",
-            },
+        <NotesRail
+          profileAvatar={profile?.avatar ?? null}
+          profileUsername={profile?.username ?? "saya"}
+          ownNoteId={ownNote?.id ?? null}
+          notes={(notesData?.data ?? []) as Array<{ id: string; isOwn?: boolean; user: { avatar: string | null; username: string } }>}
+          replyNoteId={replyNoteId}
+          onOwnNoteClick={handleOwnNoteClick}
+          onHoverNote={(noteId, anchor) => {
+            cancelHideHover();
+            setHoverAnchor(anchor);
+            setHoveredNoteId(noteId);
           }}
-        >
-          <VStack gap={4} align="center">
-            {/* Akun sendiri: buletan biru + hanya muncul kalau belum ada Catatan.
-                Kursor diarahkan (kalau sudah ada Catatan) -> kotak Catatan sendiri. */}
-            <Box
-              cursor="pointer"
-              onClick={handleOwnNoteClick}
-              title={ownNote ? "Lihat catatan" : "Buat catatan"}
-              onMouseEnter={(e) => {
-                if (!ownNote || replyNoteId) return;
-                cancelHideHover();
-                const r = e.currentTarget.getBoundingClientRect();
-                setHoverAnchor({ top: r.top, left: r.right + 8 });
-                setHoveredNoteId(ownNote.id);
-              }}
-              onMouseLeave={scheduleHideHover}
-            >
-            <VStack
-              gap={1}
-              align="center"
-            >
-              <Box position="relative">
-                <Avatar style={{ width: "60px", height: "60px" }}>
-                  <AvatarImage
-                    src={profile?.avatar || "/default-avatar.jpg"}
-                  />
-                  <AvatarFallback>
-                    {(profile?.username ?? "S").charAt(0).toUpperCase()}
-                  </AvatarFallback>
-                </Avatar>
-                {!ownNote && (
-                <Box
-                  position="absolute"
-                  bottom="0"
-                  right="0"
-                  bg="blue.600"
-                  borderRadius="full"
-                  w="20px"
-                  h="20px"
-                  display="flex"
-                  alignItems="center"
-                  justifyContent="center"
-                  border="2px solid white"
-                >
-                  <Plus size={12} color="white" />
-                </Box>
-                )}
-              </Box>
-              <Text
-                fontSize="11px"
-                color="var(--app-text)"
-                fontWeight="medium"
-                maxW="130px"
-                overflow="hidden"
-                textOverflow="ellipsis"
-                whiteSpace="nowrap"
-                textAlign="center"
-              >
-                @{profile?.username ?? "saya"}
-              </Text>
-            </VStack>
-            </Box>
-            {/* Akun-akun yang buat Catatan, susun ke bawah.
-                Kursor diarahkan -> kotak Catatan muncul di sebelahnya. */}
-            {(notesData?.data ?? [])
-              .filter((n) => !n.isOwn)
-              .map((n) => (
-                <Box
-                  key={n.id}
-                  cursor="pointer"
-                  onMouseEnter={(e) => {
-                    if (replyNoteId) return;
-                    cancelHideHover();
-                    const r = e.currentTarget.getBoundingClientRect();
-                    setHoverAnchor({ top: r.top, left: r.right + 8 });
-                    setHoveredNoteId(n.id);
-                  }}
-                  onMouseLeave={scheduleHideHover}
-                >
-                <VStack gap={1} align="center">
-                  <Avatar style={{ width: "60px", height: "60px" }}>
-                    <AvatarImage
-                      src={n.user.avatar || "/default-avatar.jpg"}
-                    />
-                    <AvatarFallback>
-                      {n.user.username.charAt(0).toUpperCase()}
-                    </AvatarFallback>
-                  </Avatar>
-                  <Text
-                    fontSize="11px"
-                    color="var(--app-text)"
-                    fontWeight="medium"
-                    maxW="130px"
-                    overflow="hidden"
-                    textOverflow="ellipsis"
-                    whiteSpace="nowrap"
-                    textAlign="center"
-                  >
-                    @{n.user.username}
-                  </Text>
-                </VStack>
-                </Box>
-              ))}
-          </VStack>
-        </VStack>
+          onLeaveHover={scheduleHideHover}
+        />
 
-        {/* TENGAH: CARI PESAN + DAFTAR PERCAKAPAN */}
-        <VStack
-          w="420px"
-          flexShrink={0}
-          borderRight="2px solid"
-          borderColor="var(--app-hover)"
-          align="stretch"
-          gap={0}
-        >
-          <Box p={5} pb={4}>
-            <HStack bg="var(--app-hover)" px={5} py={3} borderRadius="2xl" w="full">
-              <Search size={20} color="var(--app-text)" />
-              <Input
-                placeholder="Cari pesan..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                fontSize="md"
-                color="var(--app-text)"
-                border="none"
-                outline="none"
-                bg="transparent"
-                boxShadow="none"
-                p={0}
-                h="auto"
-                _placeholder={{ color: "var(--app-text)" }}
-                _focus={{ border: "none", outline: "none", boxShadow: "none" }}
-              />
-            </HStack>
-          </Box>
-          {/* Garis panjang abu-abu: di bawah kotak pencarian, di atas filter */}
-          <Box h="1px" w="full" bg="var(--app-border)" flexShrink={0} />
-          {/* Filter tengah: Pesan / Komunitas / Saluran, kotak radius (pill).
-              Aktif: bg var(--app-text) + tulisan var(--app-card) → otomatis
-              dark = kotak putih tulisan hitam, light = kotak hitam tulisan putih.
-              Non-aktif: transparan + tulisan muted. */}
-          <HStack px={5} pt={3} gap={2} flexShrink={0}>
-            {(
-              [
-                { key: "pesan", label: "Pesan" },
-                { key: "komunitas", label: "Komunitas" },
-                { key: "saluran", label: "Saluran" },
-              ] as const
-            ).map((f) => {
-              const isActive = activeFilter === f.key;
-              const badgeCount =
-                f.key === "komunitas"
-                  ? unreadCommunityCount
-                  : f.key === "saluran"
-                    ? unreadChannelCount
-                    : 0;
-              const showFilterBadge = badgeCount > 0;
-              return (
-                <Box
-                  key={f.key}
-                  as="button"
-                  px={4}
-                  py={1.5}
-                  borderRadius="full"
-                  fontSize="sm"
-                  fontWeight="bold"
-                  cursor="pointer"
-                  border="1px solid"
-                  position="relative"
-                  borderColor={
-                    isActive ? "var(--app-text)" : "var(--app-border)"
-                  }
-                  bg={isActive ? "var(--app-text)" : "transparent"}
-                  color={
-                    isActive ? "var(--app-card)" : "var(--app-muted)"
-                  }
-                  _hover={
-                    isActive
-                      ? { opacity: 0.9 }
-                      : { bg: "var(--app-hover)", color: "var(--app-text)" }
-                  }
-                  transition="0.15s"
-                  onClick={() => setActiveFilter(f.key)}
-                >
-                  {f.label}
-                  {showFilterBadge && (
-                    <Box
-                      position="absolute"
-                      top="-8px"
-                      right="-6px"
-                      minW="20px"
-                      h="20px"
-                      px="5px"
-                      borderRadius="full"
-                      bg="red.500"
-                      color="white"
-                      fontSize="11px"
-                      fontWeight="bold"
-                      display="flex"
-                      alignItems="center"
-                      justifyContent="center"
-                      border="2px solid var(--app-card)"
-                      lineHeight={1}
-                    >
-                      {formatBadge4(badgeCount)}
-                    </Box>
-                  )}
-                </Box>
-              );
-            })}
-          </HStack>
-          <Flex px={5} pt={3} pb={3} justify="space-between" align="center">
-            <Heading size="xl" color="var(--app-text)">
-              {activeFilter === "pesan"
-                ? "Pesan"
-                : activeFilter === "komunitas"
-                  ? "Komunitas"
-                  : "Saluran"}
-            </Heading>
-            {/* Buletan plus border-only di kanan heading, hanya untuk
-                Komunitas & Saluran. Komunitas → buka form Buat Komunitas
-                di panel kanan, Saluran → buka form Buat Saluran.
-                border + icon pakai var(--app-text) biar otomatis:
-                dark = putih, light = hitam. */}
-            {activeFilter !== "pesan" && (
-              <Box
-                as="button"
-                w="32px"
-                h="32px"
-                borderRadius="full"
-                border="1px solid"
-                borderColor="var(--app-text)"
-                bg="transparent"
-                display="flex"
-                alignItems="center"
-                justifyContent="center"
-                color="var(--app-text)"
-                cursor="pointer"
-                flexShrink={0}
-                aria-label={
-                  activeFilter === "komunitas"
-                    ? "Buat komunitas"
-                    : "Buat saluran"
-                }
-                title={
-                  activeFilter === "komunitas"
-                    ? "Buat komunitas"
-                    : "Buat saluran"
-                }
-                _hover={{ bg: "var(--app-hover)" }}
-                transition="0.15s"
-                onClick={() => {
-                  setSelectedConversation(null);
-                  setOwnNoteView(null);
-                  if (activeFilter === "komunitas") {
-                    setSelectedCommunityId(null);
-                    setCommunityCreateOpen(true);
-                    setSelectedChannelId(null);
-                    setChannelCreateOpen(false);
-                  } else if (activeFilter === "saluran") {
-                    setSelectedChannelId(null);
-                    setChannelCreateOpen(true);
-                    setSelectedCommunityId(null);
-                    setCommunityCreateOpen(false);
-                  }
-                }}
-              >
-                <Plus size={16} />
-              </Box>
-            )}
-          </Flex>
-
-          <Box
-            flex={1}
-            overflowY="auto"
-            css={{
-              "&::-webkit-scrollbar": { width: "4px" },
-              "&::-webkit-scrollbar-thumb": {
-                background: "#cbd5e1",
-                borderRadius: "10px",
+        <ConversationSidebar
+          searchQuery={searchQuery}
+          setSearchQuery={setSearchQuery}
+          activeFilter={activeFilter}
+          setActiveFilter={setActiveFilter}
+          unreadCommunityCount={unreadCommunityCount}
+          unreadChannelCount={unreadChannelCount}
+          conversations={conversations}
+          filteredConversations={filteredConversations}
+          loadingConversations={loadingConversations}
+          selectedConversation={selectedConversation}
+          currentUserId={currentUserId}
+          showTeraRow={showTeraRow}
+          teraLastText={teraLastText}
+          onSelectConversation={handleSelectConversation}
+          backendCommunities={backendCommunities}
+          exploreCommunities={exploreCommunities}
+          communities={communities}
+          selectedCommunityId={selectedCommunityId}
+          communityCreateOpen={communityCreateOpen}
+          joinCommunityPending={joinCommunityMutation.isPending}
+          onOpenCommunity={(id) => {
+            setSelectedConversation(null);
+            setOwnNoteView(null);
+            setCommunityCreateOpen(false);
+            setSelectedCommunityId(id);
+            setChannelCreateOpen(false);
+            setSelectedChannelId(null);
+          }}
+          onJoinAndOpenCommunity={(id) => {
+            joinCommunityMutation.mutate(id, {
+              onSuccess: () => {
+                setSelectedConversation(null);
+                setOwnNoteView(null);
+                setCommunityCreateOpen(false);
+                setSelectedCommunityId(id);
+                setChannelCreateOpen(false);
+                setSelectedChannelId(null);
               },
-            }}
-          >
-            {loadingConversations && activeFilter === "pesan" ? (
-              <Flex justify="center" py={8}>
-                <Spinner size="md" color="blue.500" />
-              </Flex>
-            ) : activeFilter === "komunitas" ? (
-              (() => {
-                const q = searchQuery.trim().toLowerCase();
-                const matchQ = (name: string, desc: string) =>
-                  !q ||
-                  name.toLowerCase().includes(q) ||
-                  desc.toLowerCase().includes(q);
-                const backendList = backendCommunities.filter((c) =>
-                  matchQ(c.name, c.description),
-                );
-                const backendNames = new Set(
-                  backendList.map((c) => c.name.trim().toLowerCase()),
-                );
-                const localList = communities.filter(
-                  (c) =>
-                    matchQ(c.name, c.description) &&
-                    !backendNames.has(c.name.trim().toLowerCase()),
-                );
-                if (backendList.length === 0 && localList.length === 0) {
-                  return (
-                    <VStack py={8} px={4}>
-                      <Text color="var(--app-text)" fontSize="sm" textAlign="center">
-                        {searchQuery ? "Tidak ada komunitas yang cocok" : "Belum ada komunitas"}
-                      </Text>
-                    </VStack>
-                  );
-                }
-                const openCommunity = (id: string) => {
-                  setSelectedConversation(null);
-                  setOwnNoteView(null);
-                  setCommunityCreateOpen(false);
-                  setSelectedCommunityId(id);
-                  setChannelCreateOpen(false);
-                  setSelectedChannelId(null);
-                };
-                return (
-                  <>
-                    {backendList.map((c) => {
-                      const isActive = selectedCommunityId === c.id && !communityCreateOpen;
-                      const unread = c.unreadCount ?? 0;
-                      return (
-                        <HStack
-                          key={c.id}
-                          px={5}
-                          py={4}
-                          gap={4}
-                          cursor="pointer"
-                          bg={isActive ? "var(--app-hover)" : "transparent"}
-                          _hover={{ bg: "var(--app-hover)" }}
-                          transition="0.2s"
-                          onClick={() => openCommunity(c.id)}
-                        >
-                          <Box w="48px" h="48px" borderRadius="full" overflow="hidden" bg="var(--app-subtle)" border="1px solid" borderColor="var(--app-border)" flexShrink={0}>
-                            {/* eslint-disable-next-line @next/next/no-img-element */}
-                            <img src={communityAvatar(c.avatarUrl)} alt={c.name} className={c.avatarUrl ? undefined : "community-logo-default"} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-                          </Box>
-                          <VStack align="start" gap={0} flex={1} overflow="hidden">
-                            <Text fontWeight="bold" color="var(--app-text)" fontSize="sm" truncate w="full">
-                              {c.name}
-                            </Text>
-                            <Text fontSize="xs" color="var(--app-muted)" overflow="hidden" textOverflow="ellipsis" whiteSpace="nowrap" w="full">
-                              {c.lastMessage ? c.lastMessage.text : c.description}
-                            </Text>
-                          </VStack>
-                          {unread > 0 && (
-                            <Box
-                              minW="22px"
-                              h="22px"
-                              px="6px"
-                              borderRadius="full"
-                              bg="red.500"
-                              color="white"
-                              fontSize="12px"
-                              fontWeight="bold"
-                              display="flex"
-                              alignItems="center"
-                              justifyContent="center"
-                              flexShrink={0}
-                            >
-                              {formatBadge4(unread)}
-                            </Box>
-                          )}
-                        </HStack>
-                      );
-                    })}
-                    {localList.map((c) => {
-                      const last = c.messages[c.messages.length - 1];
-                      const isActive = selectedCommunityId === c.id && !communityCreateOpen;
-                      return (
-                        <HStack
-                          key={c.id}
-                          px={5}
-                          py={4}
-                          gap={4}
-                          cursor="pointer"
-                          bg={isActive ? "var(--app-hover)" : "transparent"}
-                          _hover={{ bg: "var(--app-hover)" }}
-                          transition="0.2s"
-                          onClick={() => {
-                            setSelectedConversation(null);
-                            setOwnNoteView(null);
-                            setCommunityCreateOpen(false);
-                            setSelectedCommunityId(c.id);
-                          }}
-                        >
-                          <Box w="48px" h="48px" borderRadius="full" overflow="hidden" bg="var(--app-subtle)" border="1px solid" borderColor="var(--app-border)" flexShrink={0}>
-                            {/* eslint-disable-next-line @next/next/no-img-element */}
-                            <img src={communityAvatar(c.avatarUrl)} alt={c.name} className={c.avatarUrl ? undefined : "community-logo-default"} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-                          </Box>
-                          <VStack align="start" gap={0} flex={1} overflow="hidden">
-                            <Text fontWeight="bold" color="var(--app-text)" fontSize="sm" truncate w="full">
-                              {c.name}
-                            </Text>
-                            <Text fontSize="xs" color="var(--app-muted)" overflow="hidden" textOverflow="ellipsis" whiteSpace="nowrap" w="full">
-                              {last ? last.text : c.description}
-                            </Text>
-                          </VStack>
-                        </HStack>
-                      );
-                    })}
-                  </>
-                );
-              })()
-            ) : activeFilter === "saluran" ? (
-              (() => {
-                const q = searchQuery.trim().toLowerCase();
-                const list = backendChannels.filter(
-                  (c) =>
-                    !q ||
-                    c.name.toLowerCase().includes(q) ||
-                    c.description.toLowerCase().includes(q),
-                );
-                if (list.length === 0) {
-                  return (
-                    <VStack py={8} px={4}>
-                      <Text color="var(--app-text)" fontSize="sm" textAlign="center">
-                        {searchQuery ? "Tidak ada saluran yang cocok" : "Belum ada saluran"}
-                      </Text>
-                    </VStack>
-                  );
-                }
-                const openChannel = (id: string) => {
-                  setSelectedConversation(null);
-                  setOwnNoteView(null);
-                  setCommunityCreateOpen(false);
-                  setSelectedCommunityId(null);
-                  setChannelCreateOpen(false);
-                  setSelectedChannelId(id);
-                };
-                return (
-                  <>
-                    {list.map((c) => {
-                      const isActive = selectedChannelId === c.id && !channelCreateOpen;
-                      const unread = c.unreadCount ?? 0;
-                      const preview = c.lastMessage
-                        ? c.lastMessage.kind === "voice"
-                          ? `🎤 VN ${formatVoiceDuration(c.lastMessage.duration)}`
-                          : c.lastMessage.text
-                        : c.description;
-                      return (
-                        <HStack
-                          key={c.id}
-                          px={5}
-                          py={4}
-                          gap={4}
-                          cursor="pointer"
-                          bg={isActive ? "var(--app-hover)" : "transparent"}
-                          _hover={{ bg: "var(--app-hover)" }}
-                          transition="0.2s"
-                          onClick={() => openChannel(c.id)}
-                        >
-                          <Box w="48px" h="48px" borderRadius="full" overflow="hidden" bg="var(--app-subtle)" border="1px solid" borderColor="var(--app-border)" flexShrink={0}>
-                            {/* eslint-disable-next-line @next/next/no-img-element */}
-                            <img src={channelAvatar(c.avatarUrl)} alt={c.name} className={c.avatarUrl ? undefined : "channel-logo-default"} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-                          </Box>
-                          <VStack align="start" gap={0} flex={1} overflow="hidden">
-                            <Text fontWeight="bold" color="var(--app-text)" fontSize="sm" truncate w="full">
-                              {c.name}
-                            </Text>
-                            <Text fontSize="xs" color="var(--app-muted)" overflow="hidden" textOverflow="ellipsis" whiteSpace="nowrap" w="full">
-                              {preview}
-                            </Text>
-                          </VStack>
-                          {unread > 0 && (
-                            <Box
-                              minW="22px"
-                              h="22px"
-                              px="6px"
-                              borderRadius="full"
-                              bg="red.500"
-                              color="white"
-                              fontSize="12px"
-                              fontWeight="bold"
-                              display="flex"
-                              alignItems="center"
-                              justifyContent="center"
-                              flexShrink={0}
-                            >
-                              {formatBadge4(unread)}
-                            </Box>
-                          )}
-                        </HStack>
-                      );
-                    })}
-                  </>
-                );
-              })()
-            ) : filteredConversations.length === 0 && !showTeraRow ? (
-              <VStack py={8} px={4}>
-                <Text color="var(--app-text)" fontSize="sm" textAlign="center">
-                  {searchQuery
-                    ? "Tidak ada percakapan yang cocok"
-                    : "Belum ada percakapan"}
-                </Text>
-              </VStack>
-            ) : (
-              <>
-                {showTeraRow && activeFilter === "pesan" && (
-                  <HStack
-                    px={5}
-                    py={4}
-                    gap={4}
-                    cursor="pointer"
-                    bg={
-                      selectedConversation === TERA_CONVERSATION_ID
-                        ? "var(--app-hover)"
-                        : "transparent"
-                    }
-                    _hover={{ bg: "var(--app-hover)" }}
-                    transition="0.2s"
-                    onClick={() => {
-                      handleSelectConversation(TERA_CONVERSATION_ID);
-                    }}
-                  >
-                    <Box
-                      w="48px"
-                      h="48px"
-                      borderRadius="full"
-                      bgGradient="linear(to-br, blue.500, purple.500)"
-                      display="flex"
-                      alignItems="center"
-                      justifyContent="center"
-                      flexShrink={0}
-                    >
-                      <Sparkles size={24} color="white" />
-                    </Box>
-                    <VStack align="start" gap={0} flex={1} overflow="hidden">
-                      <Flex justify="space-between" w="full">
-                        <Text fontWeight="bold" color="var(--app-text)" fontSize="sm">
-                          Tera AI
-                        </Text>
-                      </Flex>
-                      <Flex justify="space-between" w="full" align="center">
-                        <Text
-                          fontSize="xs"
-                          color="var(--app-text)"
-                          fontWeight="medium"
-                          overflow="hidden"
-                          textOverflow="ellipsis"
-                          whiteSpace="nowrap"
-                          flex={1}
-                        >
-                          {teraLastText}
-                        </Text>
-                      </Flex>
-                    </VStack>
-                  </HStack>
-                )}
-                {filteredConversations.map((conv) => (
-                <HStack
-                  key={conv.id}
-                  px={5}
-                  py={4}
-                  gap={4}
-                  cursor="pointer"
-                  bg={selectedConversation === conv.id ? "var(--app-hover)" : "transparent"}
-                  _hover={{ bg: "var(--app-hover)" }}
-                  transition="0.2s"
-                  onClick={() => {
-                    handleSelectConversation(conv.id);
-                  }}
-                >
-                  <Avatar size="lg">
-                    <AvatarImage src={conv.otherUser.avatar || "/default-avatar.jpg"} />
-                    <AvatarFallback>{conv.otherUser.name.charAt(0)}</AvatarFallback>
-                  </Avatar>
-                  <VStack align="start" gap={0} flex={1} overflow="hidden">
-                    <Flex justify="space-between" w="full">
-                      <Text fontWeight="bold" color="var(--app-text)" fontSize="sm">
-                        {conv.otherUser.name}
-                      </Text>
-                      {conv.lastMessage && (
-                        <Text fontSize="xs" color="var(--app-text)" fontWeight="bold">
-                          {formatWIBTime(conv.lastMessage.createdAt)}
-                        </Text>
-                      )}
-                    </Flex>
-                    <Flex justify="space-between" w="full" align="center">
-                      <Flex align="center" gap={1} flex={1} mr={2} overflow="hidden">
-                        {conv.lastMessage?.senderId === currentUserId && (
-                          <Box flexShrink={0}>
-                            <CheckCheck
-                              size={13}
-                              color={
-                                conv.lastMessage.isRead ? "#2563eb" : "#94a3b8"
-                              }
-                            />
-                          </Box>
-                        )}
-                        <Text
-                          fontSize="xs"
-                          color="var(--app-text)"
-                          fontWeight={conv.unreadCount > 0 ? "bold" : "medium"}
-                          overflow="hidden"
-                          textOverflow="ellipsis"
-                          whiteSpace="nowrap"
-                          flex={1}
-                        >
-                          {conv.lastMessage
-                            ? conv.lastMessage.senderId === currentUserId
-                              ? `Anda: ${conv.lastMessage.text}`
-                              : conv.lastMessage.text
-                            : "Mulai percakapan"}
-                        </Text>
-                      </Flex>
-                      {conv.unreadCount > 0 && (
-                        <Badge
-                          bg="blue.600"
-                          color="white"
-                          borderRadius="full"
-                          fontSize="xs"
-                          px={1.5}
-                          minW="20px"
-                          textAlign="center"
-                        >
-                          {conv.unreadCount}
-                        </Badge>
-                      )}
-                    </Flex>
-                  </VStack>
-                </HStack>
-                ))}
-              </>
-            )}
-          </Box>
-        </VStack>
+              onError: (err: unknown) => {
+                const msg =
+                  (err as { response?: { data?: { message?: string } } })?.response?.data?.message ||
+                  "Gagal bergabung ke komunitas";
+                Swal.fire({ title: "Gagal", text: msg, icon: "error", timer: 2200, showConfirmButton: false });
+              },
+            });
+          }}
+          backendChannels={backendChannels}
+          exploreChannels={exploreChannels}
+          selectedChannelId={selectedChannelId}
+          channelCreateOpen={channelCreateOpen}
+          followChannelPending={followChannelMutation.isPending}
+          onOpenChannel={(id) => {
+            setSelectedConversation(null);
+            setOwnNoteView(null);
+            setCommunityCreateOpen(false);
+            setSelectedCommunityId(null);
+            setChannelCreateOpen(false);
+            setSelectedChannelId(id);
+          }}
+          onFollowAndOpenChannel={(id) => {
+            followChannelMutation.mutate(id, {
+              onSuccess: (res: { data?: { id?: string } }) => {
+                const nid = res?.data?.id ?? id;
+                setSelectedConversation(null);
+                setOwnNoteView(null);
+                setCommunityCreateOpen(false);
+                setSelectedCommunityId(null);
+                setChannelCreateOpen(false);
+                setSelectedChannelId(nid);
+              },
+              onError: (err: unknown) => {
+                const msg =
+                  (err as { response?: { data?: { message?: string } } })?.response?.data?.message ||
+                  "Gagal mengikuti saluran";
+                Swal.fire({ title: "Gagal", text: msg, icon: "error", timer: 2200, showConfirmButton: false });
+              },
+            });
+          }}
+          onCreateCommunity={() => {
+            setSelectedConversation(null);
+            setOwnNoteView(null);
+            setSelectedCommunityId(null);
+            setCommunityCreateOpen(true);
+            setSelectedChannelId(null);
+            setChannelCreateOpen(false);
+          }}
+          onCreateChannel={() => {
+            setSelectedConversation(null);
+            setOwnNoteView(null);
+            setSelectedCommunityId(null);
+            setCommunityCreateOpen(false);
+            setSelectedChannelId(null);
+            setChannelCreateOpen(true);
+          }}
+          joinedPaneH={joinedPaneH}
+          setJoinedPaneH={setJoinedPaneH}
+          sashDragRef={sashDragRef}
+          setSelectedConversation={setSelectedConversation}
+          setOwnNoteView={setOwnNoteView}
+          setCommunityCreateOpen={setCommunityCreateOpen}
+          setSelectedCommunityId={setSelectedCommunityId}
+          setChannelCreateOpen={setChannelCreateOpen}
+          setSelectedChannelId={setSelectedChannelId}
+          joinCommunityMutation={joinCommunityMutation}
+          followChannelMutation={followChannelMutation}
+        />
 
         {/* KANAN: WINDOW CHAT / EDITOR CATATAN.
             Saat chat biasa, wallpaper memenuhi kolom kanan (header solid,
@@ -2590,6 +1439,7 @@ function MessagesPage() {
                 avatarUrl: selectedChannel.avatarUrl,
                 ownerId: selectedChannel.ownerId,
                 followerCount: selectedChannel.followerCount,
+                createdAt: typeof selectedChannel.createdAt === "string" ? selectedChannel.createdAt : new Date(selectedChannel.createdAt).toISOString(),
               }}
               messages={channelMessages.map((m) => ({
                 ...m,
@@ -2597,6 +1447,7 @@ function MessagesPage() {
               }))}
               isOwner={selectedChannelIsOwner}
               isPreview={selectedChannelIsPreview}
+              isFollowing={selectedChannelIsFollowing}
               unreadCount={activeChannelUnreadCount}
               firstUnreadId={activeChannelFirstUnreadId}
               onRead={() => {
@@ -2636,6 +1487,34 @@ function MessagesPage() {
               }}
               onJoin={handleJoinPreviewChannel}
               joining={joiningChannel || followChannelMutation.isPending}
+              onUpdateChannel={(patch) => {
+                updateChannelMutation.mutate(patch, {
+                  onError: (err: unknown) => {
+                    const msg =
+                      (err as { response?: { data?: { message?: string } } })?.response?.data?.message ||
+                      "Gagal memperbarui saluran";
+                    Swal.fire({ title: "Gagal", text: msg, icon: "error", timer: 2200, showConfirmButton: false });
+                  },
+                });
+              }}
+              conversations={conversations}
+              onForwardToDM={(conversationId) => {
+                const link = `${window.location.origin}/messages?channel=${encodeURIComponent(selectedChannel.id)}`;
+                sendMessageMutation.mutate(
+                  {
+                    conversationId,
+                    text: `Ikuti saluran ${selectedChannel.name}: ${link}`,
+                  },
+                  {
+                    onSuccess: () => {
+                      Swal.fire({ icon: "success", title: "Diteruskan ke chat", timer: 1500, showConfirmButton: false });
+                    },
+                    onError: () => {
+                      Swal.fire({ icon: "error", title: "Gagal meneruskan", timer: 1800, showConfirmButton: false });
+                    },
+                  },
+                );
+              }}
             />
           ) : (() => {
             // Backend dulu (bisa dibuka member yang baru ditambahkan),
@@ -3386,7 +2265,7 @@ function MessagesPage() {
                     <Box as="span" fontWeight="bold">
                       Pesan tersemat:
                     </Box>{" "}
-                    {pinnedMessage.text}
+                    {voicePreviewLabel(pinnedMessage)}
                   </Text>
                 </HStack>
               )}
@@ -3631,16 +2510,20 @@ function MessagesPage() {
                               />
                             )}
                             {/* Bubble teks disembunyikan kalau isinya teks
-                                default bagikan postingan / lampiran
+                                default bagikan postingan / lampiran / VN
                                 (kotaknya yang tampil). Ketikan tambahan
-                                dikirim sebagai pesan terpisah. */}
-                            {!(
-                              (msg.postId &&
-                                msg.text === POST_SHARE_DEFAULT_TEXT) ||
-                              (msg.fileUrl &&
-                                (msg.text === FILE_SHARE_DEFAULT_TEXT ||
-                                  msg.text === IMAGE_SHARE_DEFAULT_TEXT))
-                            ) && (
+                                dikirim sebagai pesan terpisah.
+                                Kalau dibatalkan tetap tampil "Pesan ini dibatalkan". */}
+                            {(msg.isDeleted ||
+                              !(
+                                (msg.postId &&
+                                  msg.text === POST_SHARE_DEFAULT_TEXT) ||
+                                (msg.fileUrl &&
+                                  (msg.text === FILE_SHARE_DEFAULT_TEXT ||
+                                    msg.text === IMAGE_SHARE_DEFAULT_TEXT)) ||
+                                (msg.audioUrl &&
+                                  msg.text === VOICE_SHARE_DEFAULT_TEXT)
+                              )) && (
                             <Box
                               bg={
                                 isActiveTextFind
@@ -3698,7 +2581,7 @@ function MessagesPage() {
                                   : undefined
                               }
                             >
-                              {msg.replyTo && (
+                              {msg.replyTo && !msg.audioUrl && (
                                 <Box
                                   borderLeft="3px solid"
                                   borderColor={isMe ? "blue.200" : "blue.400"}
@@ -3722,7 +2605,7 @@ function MessagesPage() {
                                   >
                                     {msg.replyTo.isDeleted
                                       ? "Pesan ini dibatalkan"
-                                      : msg.replyTo.text}
+                                      : voicePreviewLabel(msg.replyTo)}
                                   </Text>
                                 </Box>
                               )}
@@ -3738,6 +2621,50 @@ function MessagesPage() {
                                     : msg.text}
                               </Text>
                             </Box>
+                            )}
+                            {/* Bubble VN DM: jenisnya ngikutin bubble VN saluran,
+                                tapi posisi tetap kiri/kanan kayak bubble biasa. */}
+                            {!!msg.audioUrl && !msg.isDeleted && (
+                              <VStack align={isMe ? "end" : "start"} gap={1}>
+                                {msg.replyTo && (
+                                  <Box
+                                    borderLeft="3px solid"
+                                    borderColor={isMe ? "blue.200" : "blue.400"}
+                                    pl={2}
+                                    overflow="hidden"
+                                    maxW="280px"
+                                  >
+                                    <Text
+                                      fontSize="10px"
+                                      fontWeight="bold"
+                                      color="var(--app-text)"
+                                    >
+                                      {msg.replyTo.sender.name}
+                                    </Text>
+                                    <Text
+                                      fontSize="xs"
+                                      color="var(--app-muted)"
+                                      overflow="hidden"
+                                      textOverflow="ellipsis"
+                                      whiteSpace="nowrap"
+                                    >
+                                      {msg.replyTo.isDeleted
+                                        ? "Pesan ini dibatalkan"
+                                        : voicePreviewLabel(msg.replyTo)}
+                                    </Text>
+                                  </Box>
+                                )}
+                                <DMVoiceBubble
+                                  url={msg.audioUrl}
+                                  duration={msg.voiceDuration ?? 0}
+                                  playing={dmPlayingId === msg.id}
+                                  onPlay={() => setDmPlayingId(msg.id)}
+                                  onPause={() => setDmPlayingId((prev) => (prev === msg.id ? null : prev))}
+                                  avatarUrl={msg.sender?.avatar ?? null}
+                                  avatarName={msg.sender?.username ?? msg.sender?.name ?? "VN"}
+                                  createdAt={msg.createdAt}
+                                />
+                              </VStack>
                             )}
                             <HStack
                               gap={1}
@@ -3898,7 +2825,7 @@ function MessagesPage() {
                         whiteSpace="nowrap"
                         maxW="full"
                       >
-                        {replyTo.isDeleted ? "Pesan ini dibatalkan" : replyTo.text}
+                        {replyTo.isDeleted ? "Pesan ini dibatalkan" : voicePreviewLabel(replyTo)}
                       </Text>
                     </VStack>
                     <IconButton
@@ -4025,7 +2952,46 @@ function MessagesPage() {
                   accept="image/jpeg,image/png,image/webp,image/gif"
                   onChange={handleImageSelect}
                 />
-                {/* Baris kirim: kotak teks + tombol kirim bulat di luarnya. */}
+                {/* Baris kirim: kotak teks + tombol kirim bulat di luarnya.
+                    Kalau lagi rekaman VN -> ganti jadi pill rekaman + tombol kirim VN.
+                    Kalau teks kosong -> buletan biru jadi mic (ala saluran). */}
+                {dmRecording ? (
+                  <HStack gap={2} align="center">
+                    <HStack
+                      flex={1}
+                      bg="var(--app-card)"
+                      border="1px solid"
+                      borderColor="var(--app-border)"
+                      borderRadius="full"
+                      px={3}
+                      py={1}
+                      gap={1}
+                      minW={0}
+                    >
+                      <DMVoiceRecorder
+                        onCancel={() => setDmRecording(false)}
+                        onSend={handleSendDmVoice}
+                      />
+                    </HStack>
+                    <IconButton
+                      bg="blue.600"
+                      color="white"
+                      borderRadius="full"
+                      w="40px"
+                      h="40px"
+                      flexShrink={0}
+                      shadow="lg"
+                      _hover={{ bg: "blue.700" }}
+                      aria-label="Kirim VN"
+                      loading={dmSendingVoice}
+                      onClick={() => {
+                        window.dispatchEvent(new CustomEvent("lentera:send-dm-vn"));
+                      }}
+                    >
+                      <Send size={18} />
+                    </IconButton>
+                  </HStack>
+                ) : (
                 <HStack gap={2} align="center">
                   <HStack
                     bg="var(--app-input)"
@@ -4106,7 +3072,9 @@ function MessagesPage() {
                     </HStack>
                   </Box>
                   </HStack>
-                  {/* Tombol kirim: di luar kotak teks, bentuk bulat, mengambang. */}
+                  {/* Buletan biru: ada isi/lampiran -> icon kirim, kosong -> icon mic.
+                      Alur mic sama kayak owner saluran VN. */}
+                  {messageText.trim() || attachment?.ready ? (
                   <IconButton
                     bg="blue.600"
                     color="white"
@@ -4127,7 +3095,24 @@ function MessagesPage() {
                   >
                     <Send size={18} />
                   </IconButton>
+                  ) : (
+                  <IconButton
+                    bg="blue.600"
+                    color="white"
+                    borderRadius="full"
+                    w="40px"
+                    h="40px"
+                    flexShrink={0}
+                    shadow="lg"
+                    _hover={{ bg: "blue.700" }}
+                    aria-label="Rekam VN"
+                    onClick={() => setDmRecording(true)}
+                  >
+                    <Mic size={18} />
+                  </IconButton>
+                  )}
                 </HStack>
+                )}
               </Box>
             </>
             )

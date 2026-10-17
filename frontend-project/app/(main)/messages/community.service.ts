@@ -26,6 +26,8 @@ export interface BackendCommunity {
     senderId: string | null;
     isEvent: boolean;
     createdAt: string;
+    audioUrl?: string | null;
+    voiceDuration?: number | null;
   } | null;
 }
 
@@ -38,6 +40,8 @@ export interface BackendCommunityMessage {
   text: string;
   isEvent: boolean;
   createdAt: string;
+  audioUrl?: string | null;
+  voiceDuration?: number | null;
 }
 
 const getCommunities = async (): Promise<BaseResponse<BackendCommunity[]>> =>
@@ -112,8 +116,17 @@ export function useUpdateBackendCommunity(communityId: string) {
 export function useSendBackendCommunityMessage(communityId: string) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (text: string) =>
-      api.post(`/communities/${communityId}/messages`, { text }).then((res) => res.data),
+    mutationFn: (
+      payload:
+        | string
+        | { text: string; audioUrl?: string | null; voiceDuration?: number | null },
+    ) =>
+      api
+        .post(
+          `/communities/${communityId}/messages`,
+          typeof payload === "string" ? { text: payload } : payload,
+        )
+        .then((res) => res.data),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["/communities", communityId, "messages"] });
       qc.invalidateQueries({ queryKey: ["/communities"] });

@@ -43,6 +43,9 @@ export interface ChatMessage {
   fileName: string | null;
   fileSize: number | null;
   fileType: string | null;
+  // VN DM (ala saluran): audioUrl + durasi detik.
+  audioUrl: string | null;
+  voiceDuration: number | null;
   createdAt: string;
   sender: ChatUser;
 }
@@ -55,6 +58,8 @@ export interface ChatConversation {
     senderId: string;
     isRead: boolean;
     createdAt: string;
+    audioUrl?: string | null;
+    voiceDuration?: number | null;
   } | null;
   unreadCount: number;
   updatedAt: string;
@@ -84,3 +89,7 @@ export const POST_SHARE_DEFAULT_TEXT = "Mengirimkan sebuah postingan.";
 // Kalau ada ketikan tambahan, dikirim sebagai pesan terpisah (bubble sendiri).
 export const FILE_SHARE_DEFAULT_TEXT = "Mengirimkan sebuah file.";
 export const IMAGE_SHARE_DEFAULT_TEXT = "Mengirimkan sebuah gambar.";
+
+// Teks default VN DM (tanpa ketikan tambahan).
+// Bubble teks disembunyikan, hanya bubble VN yang tampil (ala saluran).
+export const VOICE_SHARE_DEFAULT_TEXT = "Mengirimkan sebuah pesan suara.";

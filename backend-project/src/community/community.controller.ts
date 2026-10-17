@@ -88,6 +88,7 @@ export class CommunityController {
       this.req.user.sub,
       id,
       dto.text,
+      { audioUrl: dto.audioUrl ?? null, voiceDuration: dto.voiceDuration ?? null },
     );
     return { message: 'OK', data };
   }

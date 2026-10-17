@@ -39,6 +39,14 @@ export class SendCommunityMessageDto {
   @MinLength(1)
   @MaxLength(2000)
   text: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  audioUrl?: string | null;
+
+  @IsOptional()
+  voiceDuration?: number | null;
 }
 
 export class AddCommunityMembersDto {

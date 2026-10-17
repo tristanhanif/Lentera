@@ -91,6 +91,10 @@ export class ChatController {
         fileSize: dto.fileSize ?? null,
         fileType: dto.fileType ?? null,
       },
+      {
+        audioUrl: dto.audioUrl ?? null,
+        voiceDuration: dto.voiceDuration ?? null,
+      },
     );
     return { message: 'OK', data };
   }

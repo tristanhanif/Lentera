@@ -117,6 +117,15 @@ export class CommunityMessage {
   @Column({ default: false })
   isEvent: boolean;
 
+  // VN komunitas (ala DM/saluran): audioUrl + durasi detik (1-300).
+  // Kalau ada audioUrl, bubble teks disembunyikan (text = default VN),
+  // yang tampil bubble VN + header avatar/username/Admin.
+  @Column({ type: 'text', nullable: true })
+  audioUrl: string | null;
+
+  @Column({ type: 'int', nullable: true })
+  voiceDuration: number | null;
+
   @CreateDateColumn()
   createdAt: Date;
 }

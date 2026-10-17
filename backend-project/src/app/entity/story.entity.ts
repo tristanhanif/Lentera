@@ -100,6 +100,11 @@ export class Story {
   @Column({ type: 'datetime' })
   expiresAt: Date;
 
+  // Audiens story ala IG Close Friend: public = semua bisa lihat,
+  // close = hanya pemilik + akun yang terdaftar sebagai teman dekat pemilik.
+  @Column({ type: 'enum', enum: ['public', 'close'], default: 'public' })
+  audience: 'public' | 'close';
+
   @CreateDateColumn()
   createdAt: Date;
 

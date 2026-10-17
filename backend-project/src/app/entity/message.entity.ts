@@ -143,6 +143,15 @@ export class Message {
   @Column({ type: 'varchar', length: 20, nullable: true })
   fileType: string | null;
 
+  // VN DM (ala saluran): audioUrl + durasi detik (1-300).
+  // Kalau ada audioUrl, bubble teks disembunyikan (text = default VN),
+  // yang tampil bubble VN (play + gelombang + mic + avatar).
+  @Column({ type: 'text', nullable: true })
+  audioUrl: string | null;
+
+  @Column({ type: 'int', nullable: true })
+  voiceDuration: number | null;
+
   @CreateDateColumn()
   createdAt: Date;
 }

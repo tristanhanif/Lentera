@@ -35,6 +35,8 @@ import {
   type BackendChannelMessage,
   type ChannelMessageReactionGroup,
 } from "./channel.service";
+import ChannelInfoView from "./ChannelInfoView";
+import type { ChatConversation } from "./chat.interface";
 
 const MotionBox = motion(Box);
 const MAX_VN_SECS = 300;
@@ -46,6 +48,7 @@ export interface ChannelInfo {
   avatarUrl: string | null;
   ownerId: string;
   followerCount: number;
+  createdAt?: string;
 }
 
 interface ChannelChatViewProps {
@@ -53,6 +56,7 @@ interface ChannelChatViewProps {
   messages: BackendChannelMessage[];
   isOwner: boolean;
   isPreview?: boolean;
+  isFollowing?: boolean;
   unreadCount?: number;
   firstUnreadId?: string | null;
   onRead?: () => void;
@@ -62,6 +66,9 @@ interface ChannelChatViewProps {
   onUnfollow: () => void;
   onJoin?: () => void;
   joining?: boolean;
+  onUpdateChannel?: (patch: { description?: string; avatarUrl?: string | null }) => void;
+  conversations?: ChatConversation[];
+  onForwardToDM?: (conversationId: string) => void;
 }
 
 // Cache puncak waveform per URL biar tidak decode ulang.
@@ -505,7 +512,9 @@ function ReactionBadge({
   );
 }
 
-// ===== Popup "[angka] Reaksi": di atas-kiri bubble, 5 buletan per baris =====
+// ===== Popup "[angka] Reaksi": di bawah bubble, kanan tapi tidak rata kanan =====
+// Di bawah kotak emoji (emoji di atas bubble, popup di bawah bubble),
+// menutupi bubble chat bawahnya nggak apa-apa. 5 buletan per baris.
 // Urutan kiri -> kanan, atas -> bawah = terbanyak dulu (sudah sort backend).
 function ReactionsDetail({
   total,
@@ -522,13 +531,13 @@ function ReactionsDetail({
     <>
       <Box position="fixed" inset={0} zIndex={40} onClick={onClose} />
       <MotionBox
-        initial={{ opacity: 0, y: 8, scale: 0.97 }}
+        initial={{ opacity: 0, y: -8, scale: 0.97 }}
         animate={{ opacity: 1, y: 0, scale: 1 }}
-        exit={{ opacity: 0, y: 8, scale: 0.97 }}
+        exit={{ opacity: 0, y: -8, scale: 0.97 }}
         transition={{ duration: 0.16, ease: "easeOut" }}
         position="absolute"
-        bottom="calc(100% + 8px)"
-        left="12px"
+        top="calc(100% + 8px)"
+        right="12px"
         zIndex={50}
         bg="var(--app-card)"
         border="1px solid"
@@ -591,6 +600,7 @@ function TextBubble({
   totalReactions,
   myEmoji,
   onReact,
+  isPreview = false,
 }: {
   text: string;
   createdAt: string;
@@ -599,6 +609,7 @@ function TextBubble({
   totalReactions?: number;
   myEmoji?: string | null;
   onReact?: (emoji: string) => void;
+  isPreview?: boolean;
 }) {
   const { bubbleHoverProps, bubbleMenu } = useChannelBubbleMenu(withMenu, text, 1, onReact);
   const [showDetail, setShowDetail] = useState(false);
@@ -629,17 +640,22 @@ function TextBubble({
         </Text>
       </Flex>
       {bubbleMenu}
-      <ReactionBadge reactions={list} total={total} onOpen={() => setShowDetail(true)} />
-      <AnimatePresence>
-        {showDetail && (
-          <ReactionsDetail
-            total={total}
-            reactions={list}
-            myEmoji={myEmoji}
-            onClose={() => setShowDetail(false)}
-          />
-        )}
-      </AnimatePresence>
+      {/* Preview (belum Join): sembunyikan badge + popup Reaksi */}
+      {!isPreview && (
+        <>
+          <ReactionBadge reactions={list} total={total} onOpen={() => setShowDetail(true)} />
+          <AnimatePresence>
+            {showDetail && (
+              <ReactionsDetail
+                total={total}
+                reactions={list}
+                myEmoji={myEmoji}
+                onClose={() => setShowDetail(false)}
+              />
+            )}
+          </AnimatePresence>
+        </>
+      )}
     </Box>
   );
 }
@@ -660,6 +676,7 @@ function VoiceBubble({
   totalReactions,
   myEmoji,
   onReact,
+  isPreview = false,
 }: {
   url: string;
   duration: number;
@@ -675,6 +692,7 @@ function VoiceBubble({
   totalReactions?: number;
   myEmoji?: string | null;
   onReact?: (emoji: string) => void;
+  isPreview?: boolean;
 }) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [peaks, setPeaks] = useState<number[]>([]);
@@ -805,28 +823,35 @@ function VoiceBubble({
           </Flex>
         </VStack>
         {/* Mic biru ditempel di kiri avatar + PP avatar dibesarkan */}
+        {/* Bubble selalu putih -> avatar default dibikin buletan abu + icon hitam
+            biar kelihatan (tanpa invert dark-mode). Avatar custom tetap apa adanya. */}
         <Box position="relative" flexShrink={0} display="flex" alignItems="center" pl="8px">
           <Box position="absolute" left={0} bottom={0} color="blue.500" zIndex={1} display="flex">
             <Mic size={16} />
           </Box>
-          <Box w="44px" h="44px" borderRadius="full" overflow="hidden" bg="var(--app-subtle)" border="1px solid" borderColor="var(--app-border)" flexShrink={0}>
-            <img src={channelAvatar(avatarUrl)} alt={avatarName} className={avatarUrl ? undefined : "channel-logo-default"} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+          <Box w="44px" h="44px" borderRadius="full" overflow="hidden" bg={!avatarUrl ? "#e2e8f0" : "var(--app-subtle)"} border="1px solid" borderColor={!avatarUrl ? "#cbd5e1" : "var(--app-border)"} flexShrink={0}>
+            <img src={channelAvatar(avatarUrl)} alt={avatarName} className={undefined} style={{ width: "100%", height: "100%", objectFit: "cover", filter: !avatarUrl ? "brightness(0)" : undefined }} />
           </Box>
         </Box>
       </Flex>
 
       {bubbleMenu}
-      <ReactionBadge reactions={list} total={reactionTotal} onOpen={() => setShowDetail(true)} />
-      <AnimatePresence>
-        {showDetail && (
-          <ReactionsDetail
-            total={reactionTotal}
-            reactions={list}
-            myEmoji={myEmoji}
-            onClose={() => setShowDetail(false)}
-          />
-        )}
-      </AnimatePresence>
+      {/* Preview (belum Join): sembunyikan badge + popup Reaksi */}
+      {!isPreview && (
+        <>
+          <ReactionBadge reactions={list} total={reactionTotal} onOpen={() => setShowDetail(true)} />
+          <AnimatePresence>
+            {showDetail && (
+              <ReactionsDetail
+                total={reactionTotal}
+                reactions={list}
+                myEmoji={myEmoji}
+                onClose={() => setShowDetail(false)}
+              />
+            )}
+          </AnimatePresence>
+        </>
+      )}
     </Box>
   );
 }
@@ -848,14 +873,67 @@ function VoiceRecorder({
   const streamRef = useRef<MediaStream | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const audioCtxRef = useRef<AudioContext | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const freqArrRef = useRef<any>(null);
   const rafRef = useRef(0);
   const accRef = useRef(0);
   const startRef = useRef(0);
   const timerRef = useRef<number | null>(null);
   const mimeRef = useRef("");
   const doneRef = useRef(false);
+  // Preview hasil rekaman saat jeda: play kiri = menyetel sampai titik pause,
+  // mic merah = melanjutkan rekaman. Bukan sebaliknya.
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [previewPlaying, setPreviewPlaying] = useState(false);
+  const previewAudioRef = useRef<HTMLAudioElement | null>(null);
+  const previewUrlRef = useRef<string | null>(null);
+  const previewChunksLenRef = useRef(0);
+  const [resuming, setResuming] = useState(false);
 
+  const stopPreview = () => {
+    try {
+      previewAudioRef.current?.pause();
+    } catch {}
+    setPreviewPlaying(false);
+  };
+
+  const revokePreview = () => {
+    stopPreview();
+    const url = previewUrlRef.current;
+    if (url) {
+      try {
+        URL.revokeObjectURL(url);
+      } catch {}
+    }
+    previewUrlRef.current = null;
+    previewChunksLenRef.current = 0;
+    setPreviewUrl(null);
+  };
+
+  // Matikan total izin mic ala story.stopStream(): track.stop + tutup analyser.
+  // Dipakai saat jeda (pause) biar indikator Google mati.
+  const killMicTracks = () => {
+    try {
+      streamRef.current?.getTracks().forEach((t) => {
+        try {
+          t.stop();
+        } catch {}
+      });
+    } catch {}
+    streamRef.current = null;
+    if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    rafRef.current = 0;
+    try {
+      if (audioCtxRef.current?.state !== "closed") void audioCtxRef.current?.close();
+    } catch {}
+    audioCtxRef.current = null;
+    analyserRef.current = null;
+    freqArrRef.current = null;
+  };
   const stopTracks = () => {
+    try {
+      previewAudioRef.current?.pause();
+    } catch {}
     try {
       streamRef.current?.getTracks().forEach((t) => t.stop());
     } catch {}
@@ -864,9 +942,75 @@ function VoiceRecorder({
       if (audioCtxRef.current?.state !== "closed") void audioCtxRef.current?.close();
     } catch {}
     audioCtxRef.current = null;
+    analyserRef.current = null;
+    freqArrRef.current = null;
     if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    rafRef.current = 0;
     if (timerRef.current) window.clearInterval(timerRef.current);
+    timerRef.current = null;
   };
+
+  // Matikan mic + gelombang ala story (ketika sudah ada hasil rekaman).
+  // Pause = track dimatikan dulu biar preview bisa disetel jelas,
+  // tidak bentrok sama mic yang masih nyala.
+  const setMicEnabled = (enabled: boolean) => {
+    try {
+      streamRef.current?.getAudioTracks().forEach((t) => {
+        t.enabled = enabled;
+      });
+      streamRef.current?.getVideoTracks().forEach((t) => {
+        t.enabled = enabled;
+      });
+    } catch {}
+  };
+
+  const stopLevelsLoop = () => {
+    if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    rafRef.current = 0;
+    try {
+      void audioCtxRef.current?.suspend();
+    } catch {}
+  };
+
+  const startLevelsLoop = () => {
+    const actx = audioCtxRef.current;
+    const an = analyserRef.current;
+    const arr = freqArrRef.current;
+    if (!actx || !an || !arr) return;
+    try {
+      void actx.resume();
+    } catch {}
+    if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    const loop = () => {
+      try {
+        an.getByteFrequencyData(arr);
+        const out: number[] = [];
+        for (let i = 0; i < 32; i++) {
+          const v = arr[Math.floor((i / 32) * arr.length)] / 255;
+          out.push(Math.max(0.12, Math.min(1, v * 1.4)));
+        }
+        setLevels(out);
+      } catch {}
+      rafRef.current = requestAnimationFrame(loop);
+    };
+    loop();
+  };
+
+  // Bersihkan URL preview saat komponen dilepas.
+  useEffect(
+    () => () => {
+      const url = previewUrlRef.current;
+      if (url) {
+        try {
+          URL.revokeObjectURL(url);
+        } catch {}
+      }
+      try {
+        previewAudioRef.current?.pause();
+      } catch {}
+    },
+    [],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -907,17 +1051,9 @@ function VoiceRecorder({
           an.fftSize = 64;
           src.connect(an);
           const arr = new Uint8Array(an.frequencyBinCount);
-          const loop = () => {
-            an.getByteFrequencyData(arr);
-            const out: number[] = [];
-            for (let i = 0; i < 32; i++) {
-              const v = arr[Math.floor((i / 32) * arr.length)] / 255;
-              out.push(Math.max(0.12, Math.min(1, v * 1.4)));
-            }
-            setLevels(out);
-            rafRef.current = requestAnimationFrame(loop);
-          };
-          loop();
+          analyserRef.current = an;
+          freqArrRef.current = arr;
+          startLevelsLoop();
         } catch {}
       } catch {
         Swal.fire({ icon: "error", title: "Izin mic ditolak", text: "Aktifkan izin mikrofon dulu ya.", timer: 2200, showConfirmButton: false });
@@ -933,6 +1069,7 @@ function VoiceRecorder({
 
   const finish = (send: boolean) => {
     if (doneRef.current) return;
+    revokePreview();
     const rec = recRef.current;
     // Kalau sedang jeda, jangan hitung segmen berjalan (hindari dobel).
     const live = rec?.state === "recording" && startRef.current > 0;
@@ -962,27 +1099,137 @@ function VoiceRecorder({
 
   const pauseRec = () => {
     try {
-      if (recRef.current?.state === "recording") {
+      const rec = recRef.current;
+      if (rec?.state === "recording") {
         accRef.current += (Date.now() - startRef.current) / 1000;
         setElapsed(Math.floor(accRef.current));
-        recRef.current.pause();
+        try {
+          rec.requestData();
+        } catch {}
+        try {
+          rec.pause();
+        } catch {}
+        // Masuk jeda: matikan TOTAL izin mic ala story.stopStream()
+        // (indikator Google mati), gelombang berhenti. Preview bisa disetel.
+        stopPreview();
+        killMicTracks();
         setPhase("paused");
       }
     } catch {}
   };
 
-  const resumeRec = () => {
+  const resumeRec = async () => {
+    if (resuming) return;
     try {
-      if (recRef.current?.state === "paused") {
-        startRef.current = Date.now();
-        recRef.current.resume();
-        setPhase("recording");
+      const rec = recRef.current;
+      if (rec && rec.state === "paused") {
+        try {
+          rec.ondataavailable = null;
+        } catch {}
+        try {
+          rec.stop();
+        } catch {}
+        recRef.current = null;
+      } else if (rec && rec.state === "recording") {
+        return;
       }
+      // Lanjutkan VN via mic merah: ambil izin mic baru (indikator nyala lagi).
+      revokePreview();
+      setResuming(true);
+      let stream: MediaStream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      } catch {
+        Swal.fire({ icon: "error", title: "Izin mic ditolak", text: "Aktifkan izin mikrofon dulu ya.", timer: 2200, showConfirmButton: false });
+        setResuming(false);
+        return;
+      }
+      if (doneRef.current) {
+        stream.getTracks().forEach((t) => {
+          try {
+            t.stop();
+          } catch {}
+        });
+        setResuming(false);
+        return;
+      }
+      streamRef.current = stream;
+      if (!mimeRef.current) mimeRef.current = pickMime();
+      const next = new MediaRecorder(stream, mimeRef.current ? { mimeType: mimeRef.current } : undefined);
+      next.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) chunksRef.current.push(e.data);
+      };
+      recRef.current = next;
+      try {
+        const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+        const actx = new Ctx();
+        try {
+          await actx.resume();
+        } catch {}
+        audioCtxRef.current = actx;
+        const src = actx.createMediaStreamSource(stream);
+        const an = actx.createAnalyser();
+        an.fftSize = 64;
+        src.connect(an);
+        const arr = new Uint8Array(an.frequencyBinCount);
+        analyserRef.current = an;
+        freqArrRef.current = arr;
+        startLevelsLoop();
+      } catch {}
+      next.start(250);
+      startRef.current = Date.now();
+      setPhase("recording");
+      setResuming(false);
+    } catch {
+      setResuming(false);
+    }
+  };
+
+  // Play kiri saat jeda = menyetel hasil rekaman sampai titik pause (preview).
+  // Bukan melanjutkan rekaman. Melanjutkan hanya via buletan merah mic.
+  const togglePreview = () => {
+    try {
+      const audio = previewAudioRef.current;
+      if (!audio) return;
+      if (previewPlaying) {
+        audio.pause();
+        setPreviewPlaying(false);
+        return;
+      }
+      if (chunksRef.current.length === 0) {
+        Swal.fire({ icon: "warning", title: "Belum ada suara", text: "Rekam dulu sebentar ya.", timer: 1500, showConfirmButton: false });
+        return;
+      }
+      const curLen = chunksRef.current.length;
+      if (previewUrl && previewChunksLenRef.current === curLen) {
+        audio.play().then(() => setPreviewPlaying(true)).catch(() => setPreviewPlaying(false));
+        return;
+      }
+      if (previewUrlRef.current) {
+        try {
+          URL.revokeObjectURL(previewUrlRef.current);
+        } catch {}
+      }
+      const blob = new Blob(chunksRef.current, { type: mimeRef.current || "audio/webm" });
+      const url = URL.createObjectURL(blob);
+      previewUrlRef.current = url;
+      previewChunksLenRef.current = curLen;
+      setPreviewUrl(url);
+      setTimeout(() => {
+        const a = previewAudioRef.current;
+        if (a) {
+          try {
+            (a as HTMLAudioElement).src = url;
+          } catch {}
+          a.play().then(() => setPreviewPlaying(true)).catch(() => setPreviewPlaying(false));
+        }
+      }, 30);
     } catch {}
   };
 
   const discard = () => {
     doneRef.current = true;
+    revokePreview();
     try {
       recRef.current?.stop();
     } catch {}
@@ -1001,6 +1248,14 @@ function VoiceRecorder({
 
   return (
     <HStack flex={1} gap={2} align="center" minW={0}>
+      {/* Audio tersembunyi buat menyetel hasil sampai titik pause */}
+      <audio
+        ref={previewAudioRef}
+        src={previewUrl ?? undefined}
+        preload="metadata"
+        onEnded={() => setPreviewPlaying(false)}
+        onPause={() => setPreviewPlaying(false)}
+      />
       <IconButton
         aria-label="Hapus rekaman"
         variant="ghost"
@@ -1017,16 +1272,17 @@ function VoiceRecorder({
         <Box w="10px" h="10px" borderRadius="full" bg="red.500" flexShrink={0} />
       ) : (
         <IconButton
-          aria-label="Lanjutkan dari jeda"
+          aria-label={previewPlaying ? "Jeda putar hasil" : "Putar hasil rekaman"}
+          title={previewPlaying ? "Jeda putar" : "Setel hasil sampai pause"}
           variant="ghost"
           size="sm"
           borderRadius="full"
           color="var(--app-text)"
           _hover={{ bg: "var(--app-subtle)" }}
-          onClick={resumeRec}
+          onClick={togglePreview}
           flexShrink={0}
         >
-          <Play size={18} />
+          {previewPlaying ? <Pause size={18} /> : <Play size={18} />}
         </IconButton>
       )}
       {phase === "paused" && (
@@ -1071,6 +1327,7 @@ function VoiceRecorder({
         <Box
           as="button"
           aria-label="Lanjutkan rekaman"
+          title="Nyalakan mic lagi & lanjutkan"
           w="36px"
           h="36px"
           borderRadius="full"
@@ -1079,8 +1336,9 @@ function VoiceRecorder({
           display="flex"
           alignItems="center"
           justifyContent="center"
-          cursor="pointer"
+          cursor={resuming ? "wait" : "pointer"}
           flexShrink={0}
+          opacity={resuming ? 0.6 : 1}
           _hover={{ bg: "red.600" }}
           onClick={resumeRec}
         >
@@ -1096,6 +1354,7 @@ export default function ChannelChatView({
   messages,
   isOwner,
   isPreview = false,
+  isFollowing = false,
   unreadCount = 0,
   firstUnreadId = null,
   onRead,
@@ -1105,12 +1364,16 @@ export default function ChannelChatView({
   onUnfollow,
   onJoin,
   joining = false,
+  onUpdateChannel,
+  conversations = [],
+  onForwardToDM,
 }: ChannelChatViewProps) {
   const [text, setText] = useState("");
   const [menuOpen, setMenuOpen] = useState(false);
   const [recording, setRecording] = useState(false);
   const [playingId, setPlayingId] = useState<string | null>(null);
   const [confirmUnfollow, setConfirmUnfollow] = useState(false);
+  const [showInfo, setShowInfo] = useState(false);
   const reactMutation = useReactChannelMessage(channel.id);
   const handleReact = (messageId: string, emoji: string) => {
     if (isPreview || reactMutation.isPending) return;
@@ -1210,11 +1473,40 @@ export default function ChannelChatView({
 
   const startRecording = () => setRecording(true);
 
+  if (showInfo) {
+    return (
+      <ChannelInfoView
+        channel={{
+          id: channel.id,
+          name: channel.name,
+          description: channel.description,
+          avatarUrl: channel.avatarUrl,
+          ownerId: channel.ownerId,
+          followerCount: channel.followerCount,
+          createdAt: channel.createdAt ?? new Date().toISOString(),
+        }}
+        isOwner={isOwner}
+        isFollowing={isFollowing || isOwner || !isPreview}
+        isPreview={isPreview}
+        joining={joining}
+        onBack={() => setShowInfo(false)}
+        onFollow={() => onJoin?.()}
+        onUnfollow={() => {
+          setShowInfo(false);
+          onUnfollow();
+        }}
+        onUpdateChannel={(patch) => onUpdateChannel?.(patch)}
+        conversations={conversations}
+        onForwardToDM={(cid) => onForwardToDM?.(cid)}
+      />
+    );
+  }
+
   return (
     <Flex flex={1} direction="column" h="full" minH={0} position="relative" bg="var(--app-card)">
-      {/* Header */}
+      {/* Header: pencet nama/avatar -> Info saluran */}
       <Flex p={4} bg="var(--app-card)" borderBottom="1px solid" borderColor="var(--app-hover)" justify="space-between" align="center" shadow="sm" position="relative" zIndex={10}>
-        <HStack gap={3}>
+        <HStack gap={3} cursor="pointer" onClick={() => setShowInfo(true)} title={`Info saluran ${channel.name}`}>
           <Box w="48px" h="48px" borderRadius="full" overflow="hidden" bg="var(--app-subtle)" border="1px solid" borderColor="var(--app-border)" flexShrink={0}>
             <img src={channelAvatar(channel.avatarUrl)} alt={channel.name} className={channel.avatarUrl ? undefined : "channel-logo-default"} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
           </Box>
@@ -1228,7 +1520,7 @@ export default function ChannelChatView({
           </VStack>
         </HStack>
         <HStack gap={2} align="center">
-          {/* Cara Join #1: kotak radius biru tulisan putih di header,
+          {/* Cara Follow #1: kotak radius biru tulisan putih di header,
               sebelah kiri icon titik-tiga (mode preview / liat-liat). */}
           {isPreview && !isOwner && (
             <Button
@@ -1242,7 +1534,7 @@ export default function ChannelChatView({
               loading={joining}
               onClick={() => onJoin?.()}
             >
-              Join
+              Follow
             </Button>
           )}
           <Box position="relative">
@@ -1264,7 +1556,7 @@ export default function ChannelChatView({
                         </Text>
                       )}
                       <Text fontSize="xs" color="var(--app-muted)" mt={2}>
-                        Join dulu untuk opsi lainnya.
+                        Follow dulu untuk opsi lainnya.
                       </Text>
                     </Box>
                   ) : (
@@ -1306,7 +1598,7 @@ export default function ChannelChatView({
                 loading={joining}
                 onClick={() => onJoin?.()}
               >
-                Join
+                Follow
               </Button>
             )}
             <Box h="1px" w="full" bg="var(--app-border)" my={2} />
@@ -1342,7 +1634,7 @@ export default function ChannelChatView({
                   </Box>
                 </Flex>
               )}
-              <Flex justify="center" id={`chmsg-${m.id}`} pb={(m.totalReactions ?? 0) > 0 ? 3 : 0}>
+              <Flex justify="center" id={`chmsg-${m.id}`} pb={!isPreview && (m.totalReactions ?? 0) > 0 ? 3 : 0}>
                 {m.kind === "voice" && m.audioUrl ? (
                   <VoiceBubble
                     url={m.audioUrl}
@@ -1359,6 +1651,7 @@ export default function ChannelChatView({
                     totalReactions={m.totalReactions}
                     myEmoji={m.myEmoji}
                     onReact={(emoji) => handleReact(m.id, emoji)}
+                    isPreview={isPreview}
                   />
                 ) : (
                   <TextBubble
@@ -1369,6 +1662,7 @@ export default function ChannelChatView({
                     totalReactions={m.totalReactions}
                     myEmoji={m.myEmoji}
                     onReact={(emoji) => handleReact(m.id, emoji)}
+                    isPreview={isPreview}
                   />
                 )}
               </Flex>
@@ -1448,7 +1742,7 @@ export default function ChannelChatView({
         <Box p={4} flexShrink={0} bg="transparent">
           <HStack bg="var(--app-card)" border="1px solid" borderColor="var(--app-border)" borderRadius="full" px={3} py={2} gap={2}>
             <Text fontSize="xs" color="var(--app-muted)" flex={1} textAlign="center" lineClamp={1}>
-              Liat-liat dulu, Join kalau cocok.
+              Liat-liat dulu, Follow kalau cocok.
             </Text>
             <Button
               size="sm"
@@ -1462,7 +1756,7 @@ export default function ChannelChatView({
               loading={joining}
               onClick={() => onJoin?.()}
             >
-              Join
+              Follow
             </Button>
           </HStack>
         </Box>

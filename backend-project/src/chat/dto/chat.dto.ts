@@ -100,6 +100,14 @@ export class SendMessageDto {
   @IsOptional()
   @IsString()
   fileType?: string;
+
+  @IsOptional()
+  @IsString()
+  audioUrl?: string;
+
+  @IsOptional()
+  @IsNumber()
+  voiceDuration?: number;
 }
 
 export class CreateConversationDto {

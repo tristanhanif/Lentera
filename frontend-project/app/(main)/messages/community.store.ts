@@ -10,6 +10,9 @@ export interface CommunityMessage {
   // Event permanen backend (mis. "'username' telah ditambahkan"):
   // tampil di tengah sebagai kotak sistem.
   isEvent?: boolean;
+  // VN komunitas (ala DM/saluran): audioUrl + durasi detik.
+  audioUrl?: string | null;
+  voiceDuration?: number | null;
 }
 
 export interface CommunityMember {

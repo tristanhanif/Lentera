@@ -41,6 +41,8 @@ const sendChatMessage = async ({
   fileName,
   fileSize,
   fileType,
+  audioUrl,
+  voiceDuration,
 }: {
   conversationId: string;
   text: string;
@@ -60,6 +62,8 @@ const sendChatMessage = async ({
   fileName?: string | null;
   fileSize?: number | null;
   fileType?: string | null;
+  audioUrl?: string | null;
+  voiceDuration?: number | null;
 }): Promise<BaseResponse<ChatMessage>> => {
   return api
     .post(`/chat/conversations/${conversationId}/messages`, {
@@ -80,6 +84,8 @@ const sendChatMessage = async ({
       ...(fileName ? { fileName } : {}),
       ...(typeof fileSize === "number" ? { fileSize } : {}),
       ...(fileType ? { fileType } : {}),
+      ...(audioUrl ? { audioUrl } : {}),
+      ...(typeof voiceDuration === "number" ? { voiceDuration } : {}),
     })
     .then((res) => res.data);
 };

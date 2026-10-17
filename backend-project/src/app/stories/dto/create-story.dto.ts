@@ -139,6 +139,10 @@ export class CreateStoryDto {
   caption?: string;
 
   @IsOptional()
+  @IsIn(['public', 'close'], { message: 'Audience harus public atau close' })
+  audience?: 'public' | 'close';
+
+  @IsOptional()
   @IsISO8601({}, { message: 'unlockAt harus format ISO8601' })
   unlockAt?: string;
 
