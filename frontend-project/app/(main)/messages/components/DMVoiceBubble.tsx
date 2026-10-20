@@ -1,34 +1,40 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { Box, VStack, Flex, Text } from "@chakra-ui/react";
 import { Play, Pause, Mic } from "lucide-react";
 import { formatVoiceDuration } from "../channel.service";
 import { formatWIBTime } from "../utils/chat-time";
 import { getDmPeaks } from "../utils/dm-voice";
+import { toggleVoice, useIsVoicePlaying, useVoicePlayback } from "../utils/voice-player";
 
+// Bubble VN DM: memakai global voice player (satu <audio> untuk semua
+// pane). Jadi kalau VN lain (pane manapun) diputar, VN ini otomatis
+// berhenti, dan mini-player di bawah daftar percakapan ikut menampilkannya.
 export default function DMVoiceBubble({
+  id,
   url,
   duration,
-  playing,
-  onPlay,
-  onPause,
   avatarUrl,
   avatarName,
   createdAt,
+  sourceKey,
 }: {
+  id: string;
   url: string;
   duration: number;
-  playing: boolean;
-  onPlay: () => void;
-  onPause: () => void;
   avatarUrl: string | null;
   avatarName: string;
   createdAt: string;
+  // Konteks percakapan DM tempat bubble ini berada ("dm:<convId>") — dipakai
+  // VoiceMiniPlayer untuk menyembunyikan kotak mini saat user masih di sini.
+  sourceKey: string | null;
 }) {
-  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const globalPlaying = useIsVoicePlaying(id);
+  const globalPlayback = useVoicePlayback(id);
+  const playing = globalPlaying;
+  const elapsed = globalPlayback.elapsed;
+  const progress = globalPlayback.progress;
   const [peaks, setPeaks] = useState<number[]>([]);
-  const [progress, setProgress] = useState(0);
-  const [elapsed, setElapsed] = useState(0);
 
   useEffect(() => {
     let live = true;
@@ -39,26 +45,6 @@ export default function DMVoiceBubble({
       live = false;
     };
   }, [url]);
-
-  useEffect(() => {
-    const a = audioRef.current;
-    if (!a) return;
-    if (playing) {
-      a.play().catch(() => onPause());
-    } else {
-      a.pause();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [playing]);
-
-  useEffect(
-    () => () => {
-      try {
-        audioRef.current?.pause();
-      } catch {}
-    },
-    [],
-  );
 
   const total = Math.max(1, duration);
   const pct = Math.min(1, Math.max(0, progress));
@@ -77,21 +63,6 @@ export default function DMVoiceBubble({
       borderColor="var(--app-border)"
       position="relative"
     >
-      <audio
-        ref={audioRef}
-        src={url}
-        preload="metadata"
-        onTimeUpdate={(e) => {
-          const t = e.currentTarget;
-          setElapsed(t.currentTime);
-          setProgress(t.duration ? t.currentTime / t.duration : 0);
-        }}
-        onEnded={() => {
-          setProgress(0);
-          setElapsed(0);
-          onPause();
-        }}
-      />
       <Flex align="center" gap={2.5}>
         <Box
           as="button"
@@ -102,21 +73,24 @@ export default function DMVoiceBubble({
           justifyContent="center"
           cursor="pointer"
           flexShrink={0}
-          onClick={() => (playing ? onPause() : onPlay())}
+          onClick={() => void toggleVoice(id, url, avatarName, avatarUrl, sourceKey)}
         >
           {playing ? <Pause size={22} /> : <Play size={22} />}
         </Box>
         <VStack flex={1} minW={0} align="stretch" gap={1}>
           <Box position="relative" h="36px">
-            <Flex align="center" justify="center" gap="2px" h="full">
+            {/* Bar menyusut mengikuti lebar area (flex:1) supaya waveform
+                tidak meluber menumpuk icon play & avatar. */}
+            <Flex align="center" gap="2px" h="full">
               {(peaks.length ? peaks : Array.from({ length: 48 }, () => 0.4)).map((p, i, arr) => (
                 <Box
                   key={i}
-                  w="3px"
+                  flex={1}
+                  minW="1px"
+                  maxW="4px"
                   borderRadius="full"
                   bg={i / arr.length <= pct ? "blue.500" : "#cbd5e1"}
                   style={{ height: `${Math.round(p * 100)}%` }}
-                  flexShrink={0}
                 />
               ))}
             </Flex>

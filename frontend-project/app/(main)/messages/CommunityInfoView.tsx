@@ -16,7 +16,10 @@ import {
 import {
   Check,
   ChevronLeft,
+  Copy,
   EllipsisVertical,
+  Forward,
+  Link2,
   Pencil,
   Plus,
   Search,
@@ -32,6 +35,7 @@ import {
 } from "./community.store";
 import { useGetFollowers } from "../profile/followList.service";
 import { uploadToCloudinary } from "@/app/lib/upload";
+import type { ChatConversation } from "./chat.interface";
 
 const MotionBox = motion(Box);
 
@@ -51,6 +55,9 @@ interface CommunityInfoViewProps {
   // Backend saja (komunitas lokal tidak dapat menu anggota).
   onPromoteMember?: (memberId: string) => void;
   onRemoveMember?: (memberId: string) => void;
+  // Buletan Forward (ala Info Saluran): daftar DM + kirim link komunitas.
+  conversations: ChatConversation[];
+  onForwardToDM: (conversationId: string) => void;
 }
 
 // Kotak Komunitas Info (pengganti kotak percakapan saat "Mengelola Komunitas"
@@ -66,6 +73,8 @@ export default function CommunityInfoView({
   onAddMembers,
   onPromoteMember,
   onRemoveMember,
+  conversations,
+  onForwardToDM,
 }: CommunityInfoViewProps) {
   const isOwner = community.ownerId === currentUserId;
   const myEntry = (community.members ?? []).find((m) => m.id === currentUserId);
@@ -190,6 +199,36 @@ export default function CommunityInfoView({
       Swal.fire({ icon: "error", title: "Gagal mengunggah logo", timer: 1800, showConfirmButton: false });
     } finally {
       setUploadingAvatar(false);
+    }
+  };
+
+  // Buletan Forward (ala Info Saluran): modal daftar percakapan DM.
+  const [forwardOpen, setForwardOpen] = useState(false);
+  const [forwardSearch, setForwardSearch] = useState("");
+  const filteredConversations = conversations.filter((c) => {
+    const q = forwardSearch.trim().toLowerCase();
+    if (!q) return true;
+    return (
+      c.otherUser.name.toLowerCase().includes(q) ||
+      c.otherUser.username.toLowerCase().includes(q)
+    );
+  });
+
+  const communityLink = () => {
+    try {
+      return `${window.location.origin}/messages?community=${encodeURIComponent(community.id)}`;
+    } catch {
+      return `/messages?community=${encodeURIComponent(community.id)}`;
+    }
+  };
+
+  const handleCopyLink = async () => {
+    const link = communityLink();
+    try {
+      await navigator.clipboard.writeText(link);
+      Swal.fire({ icon: "success", title: "Link disalin", timer: 1500, showConfirmButton: false });
+    } catch {
+      Swal.fire({ icon: "error", title: "Gagal menyalin link", timer: 1800, showConfirmButton: false });
     }
   };
 
@@ -357,6 +396,64 @@ export default function CommunityInfoView({
             Komunitas • {totalMembers} Anggota
           </Text>
         </VStack>
+
+        {/* 2 buletan: Forward - Copy link (ala Info Saluran) */}
+        <Flex px={6} pt={3} pb={2} justify="center" gap={8}>
+          <VStack gap={1.5} align="center">
+            <Box
+              as="button"
+              aria-label="Forward komunitas ke chat"
+              w="52px"
+              h="52px"
+              borderRadius="full"
+              bg="var(--app-subtle)"
+              border="1px solid"
+              borderColor="var(--app-border)"
+              color="var(--app-text)"
+              display="flex"
+              alignItems="center"
+              justifyContent="center"
+              cursor="pointer"
+              _hover={{ bg: "var(--app-hover)" }}
+              onClick={() => {
+                setForwardSearch("");
+                setForwardOpen(true);
+              }}
+              title="Forward"
+            >
+              <Forward size={22} />
+            </Box>
+            <Text fontSize="xs" color="var(--app-text)" fontWeight="medium">
+              Forward
+            </Text>
+          </VStack>
+
+          <VStack gap={1.5} align="center">
+            <Box
+              as="button"
+              aria-label="Copy link komunitas"
+              w="52px"
+              h="52px"
+              borderRadius="full"
+              bg="var(--app-subtle)"
+              border="1px solid"
+              borderColor="var(--app-border)"
+              color="var(--app-text)"
+              display="flex"
+              alignItems="center"
+              justifyContent="center"
+              cursor="pointer"
+              _hover={{ bg: "var(--app-hover)" }}
+              onClick={handleCopyLink}
+              title="Copy link"
+            >
+              <Link2 size={22} />
+            </Box>
+            <Text fontSize="xs" color="var(--app-text)" fontWeight="medium">
+              Copy link
+            </Text>
+          </VStack>
+        </Flex>
 
         {/* Garis panjang */}
         <Box h="1px" w="full" bg="var(--app-border)" mt={3} flexShrink={0} />
@@ -640,6 +737,90 @@ export default function CommunityInfoView({
                   Simpan
                 </Button>
               </Flex>
+            </MotionBox>
+          </Box>
+        )}
+      </AnimatePresence>
+
+      {/* Modal Forward ke chat DM */}
+      <AnimatePresence>
+        {forwardOpen && (
+          <Box position="absolute" inset={0} zIndex={35} display="flex" alignItems="center" justifyContent="center" bg="rgba(0, 0, 0, 0.4)" onClick={() => setForwardOpen(false)}>
+            <MotionBox initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} transition={{ duration: 0.18 }} bg="var(--app-card)" borderRadius="xl" shadow="xl" border="1px solid" borderColor="var(--app-border)" w="400px" maxW="calc(100% - 48px)" maxH="80%" display="flex" flexDirection="column" overflow="hidden" onClick={(e: React.MouseEvent) => e.stopPropagation()}>
+              <Flex p={4} borderBottom="1px solid" borderColor="var(--app-hover)" align="center" gap={2} flexShrink={0}>
+                <Text fontWeight="bold" color="var(--app-text)" fontSize="md" flex={1}>
+                  Forward ke chat
+                </Text>
+                <Box as="button" aria-label="Tutup forward" color="var(--app-muted)" _hover={{ color: "var(--app-text)" }} onClick={() => setForwardOpen(false)} fontSize="sm" fontWeight="bold" px={2}>
+                  Tutup
+                </Box>
+              </Flex>
+              <Box p={4} pb={2} flexShrink={0}>
+                <HStack bg="var(--app-input)" border="1px solid" borderColor="var(--app-border)" borderRadius="xl" px={3} py={1}>
+                  <Search size={16} color="var(--app-faint)" />
+                  <Input
+                    value={forwardSearch}
+                    onChange={(e) => setForwardSearch(e.target.value)}
+                    placeholder="Cari obrolan..."
+                    fontSize="sm"
+                    color="var(--app-text)"
+                    border="none"
+                    bg="transparent"
+                    p={0}
+                    h="36px"
+                    _placeholder={{ color: "var(--app-faint)" }}
+                    _focus={{ boxShadow: "none" }}
+                  />
+                </HStack>
+              </Box>
+              <VStack flex={1} overflowY="auto" px={4} py={2} gap={1} align="stretch" minH={0} css={{ "&::-webkit-scrollbar": { width: "4px" }, "&::-webkit-scrollbar-thumb": { background: "#cbd5e1", borderRadius: "10px" } }}>
+                {filteredConversations.length === 0 ? (
+                  <Text fontSize="sm" color="var(--app-muted)" textAlign="center" py={6}>
+                    Belum ada percakapan
+                  </Text>
+                ) : (
+                  filteredConversations.map((c) => (
+                    <HStack
+                      key={c.id}
+                      gap={3}
+                      p={2.5}
+                      borderRadius="xl"
+                      cursor="pointer"
+                      _hover={{ bg: "var(--app-hover)" }}
+                      transition="0.15s"
+                      onClick={() => {
+                        setForwardOpen(false);
+                        onForwardToDM(c.id);
+                      }}
+                    >
+                      <Box w="40px" h="40px" borderRadius="full" overflow="hidden" bg="var(--app-subtle)" flexShrink={0}>
+                        <img src={c.otherUser.avatar || "/default-avatar.jpg"} alt={c.otherUser.username} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                      </Box>
+                      <VStack align="start" gap={0} flex={1} minW={0}>
+                        <Text fontSize="sm" fontWeight="bold" color="var(--app-text)" truncate w="full">
+                          {c.otherUser.name}
+                        </Text>
+                        <Text fontSize="xs" color="var(--app-muted)" truncate w="full">
+                          @{c.otherUser.username}
+                        </Text>
+                      </VStack>
+                      <Box color="var(--app-muted)" display="flex" flexShrink={0}>
+                        <Forward size={16} />
+                      </Box>
+                    </HStack>
+                  ))
+                )}
+              </VStack>
+              <Box p={4} borderTop="1px solid" borderColor="var(--app-hover)" flexShrink={0}>
+                <HStack gap={2}>
+                  <Box color="var(--app-muted)" display="flex">
+                    <Copy size={15} />
+                  </Box>
+                  <Text fontSize="xs" color="var(--app-muted)" flex={1} truncate>
+                    {communityLink()}
+                  </Text>
+                </HStack>
+              </Box>
             </MotionBox>
           </Box>
         )}

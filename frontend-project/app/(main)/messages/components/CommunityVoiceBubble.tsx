@@ -1,43 +1,56 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
-import { Box, VStack, HStack, Flex, Text } from "@chakra-ui/react";
+import { useEffect, useState } from "react";
+import { Box, VStack, Flex, Text, HStack } from "@chakra-ui/react";
 import { Play, Pause, Mic } from "lucide-react";
 import { formatVoiceDuration } from "../channel.service";
 import { formatWIBTime } from "../utils/chat-time";
 import { getDmPeaks } from "../utils/dm-voice";
+import { toggleVoice, useIsVoicePlaying, useVoicePlayback } from "../utils/voice-player";
 
-// Bubble VN komunitas: sama kayak VN pesan/saluran
-// (play + gelombang biru + mic), tapi ada header khas komunitas:
-// avatar kiri atas + username di kanannya + opsional "Admin Komunitas".
+// Bubble VN komunitas: isi bubble 1:1 dengan DMVoiceBubble tapi memakai
+// global voice player (satu <audio> buat semua pane — DM/komunitas/saluran
+// nyambung, VN lain otomatis berhenti, mini-player ikut menampilkannya),
+// plus header khas komunitas: pp avatar + "Kamu"/username + Admin Komunitas.
 export default function CommunityVoiceBubble({
+  id,
   url,
   duration,
-  playing,
-  onPlay,
-  onPause,
+  playing: _ignoredPlaying,
+  onPlay: _ignoredOnPlay,
+  onPause: _ignoredOnPause,
   avatarUrl,
   avatarName,
   displayName,
   isAdmin,
   createdAt,
-  mine,
-  meText,
+  sourceKey,
 }: {
+  id: string;
   url: string;
   duration: number;
-  playing: boolean;
-  onPlay: () => void;
-  onPause: () => void;
-  avatarUrl: string;
+  // Deprecated: tetap diterima agar pemanggil lama tidak error, tapi
+  // tidak dipakai lagi — playing/progres kini dari global voice player.
+  playing?: boolean;
+  onPlay?: () => void;
+  onPause?: () => void;
+  avatarUrl: string | null;
   avatarName: string;
   displayName: string;
   isAdmin: boolean;
   createdAt: string;
+  // Konteks komunitas tempat bubble ini berada ("community:<id>") — dipakai
+  // VoiceMiniPlayer untuk menyembunyikan kotak mini saat user masih di sini.
+  sourceKey?: string | null;
 }) {
-  const audioRef = useRef<HTMLAudioElement | null>(null);
+  void _ignoredPlaying;
+  void _ignoredOnPlay;
+  void _ignoredOnPause;
+  const globalPlaying = useIsVoicePlaying(id);
+  const globalPlayback = useVoicePlayback(id);
+  const playing = globalPlaying;
+  const elapsed = globalPlayback.elapsed;
+  const progress = globalPlayback.progress;
   const [peaks, setPeaks] = useState<number[]>([]);
-  const [progress, setProgress] = useState(0);
-  const [elapsed, setElapsed] = useState(0);
 
   useEffect(() => {
     let live = true;
@@ -49,32 +62,12 @@ export default function CommunityVoiceBubble({
     };
   }, [url]);
 
-  useEffect(() => {
-    const a = audioRef.current;
-    if (!a) return;
-    if (playing) {
-      a.play().catch(() => onPause());
-    } else {
-      a.pause();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [playing]);
-
-  useEffect(
-    () => () => {
-      try {
-        audioRef.current?.pause();
-      } catch {}
-    },
-    [],
-  );
-
   const total = Math.max(1, duration);
   const pct = Math.min(1, Math.max(0, progress));
 
   return (
     <Box
-      w="300px"
+      w="280px"
       maxW="100%"
       px={4}
       py={3}
@@ -86,26 +79,12 @@ export default function CommunityVoiceBubble({
       borderColor="var(--app-border)"
       position="relative"
     >
-      <audio
-        ref={audioRef}
-        src={url}
-        preload="metadata"
-        onTimeUpdate={(e) => {
-          const t = e.currentTarget;
-          setElapsed(t.currentTime);
-          setProgress(t.duration ? t.currentTime / t.duration : 0);
-        }}
-        onEnded={() => {
-          setProgress(0);
-          setElapsed(0);
-          onPause();
-        }}
-      />
-      {/* Header khas komunitas: avatar + username + Admin */}
+      {/* Header khas komunitas: pp avatar kiri + "Kamu"/username,
+          plus "Admin Komunitas" kalau pengirimnya admin. */}
       <HStack gap={2} align="center" mb={2}>
-        <Box w="32px" h="32px" borderRadius="full" overflow="hidden" bg="var(--app-subtle)" flexShrink={0}>
+        <Box w="32px" h="32px" borderRadius="full" overflow="hidden" bg="#e2e8f0" border="1px solid" borderColor="#cbd5e1" flexShrink={0}>
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={avatarUrl} alt={avatarName} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+          <img src={avatarUrl || "/default-avatar.jpg"} alt={avatarName} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
         </Box>
         <VStack align="start" gap={0} minW={0}>
           <Text fontSize="xs" fontWeight="bold" color="black" lineClamp={1}>
@@ -128,21 +107,24 @@ export default function CommunityVoiceBubble({
           justifyContent="center"
           cursor="pointer"
           flexShrink={0}
-          onClick={() => (playing ? onPause() : onPlay())}
+          onClick={() => void toggleVoice(id, url, displayName, avatarUrl, sourceKey ?? null)}
         >
           {playing ? <Pause size={22} /> : <Play size={22} />}
         </Box>
         <VStack flex={1} minW={0} align="stretch" gap={1}>
           <Box position="relative" h="36px">
-            <Flex align="center" justify="center" gap="2px" h="full">
+            {/* Bar menyusut mengikuti lebar area (flex:1) supaya waveform
+                tidak meluber menumpuk icon play & avatar (sama kayak DM). */}
+            <Flex align="center" gap="2px" h="full">
               {(peaks.length ? peaks : Array.from({ length: 48 }, () => 0.4)).map((p, i, arr) => (
                 <Box
                   key={i}
-                  w="3px"
+                  flex={1}
+                  minW="1px"
+                  maxW="4px"
                   borderRadius="full"
                   bg={i / arr.length <= pct ? "blue.500" : "#cbd5e1"}
                   style={{ height: `${Math.round(p * 100)}%` }}
-                  flexShrink={0}
                 />
               ))}
             </Flex>
@@ -168,8 +150,14 @@ export default function CommunityVoiceBubble({
             </Text>
           </Flex>
         </VStack>
-        <Box color="blue.500" display="flex" alignItems="center" flexShrink={0}>
-          <Mic size={16} />
+        <Box position="relative" flexShrink={0} display="flex" alignItems="center" pl="8px">
+          <Box position="absolute" left={0} bottom={0} color="blue.500" zIndex={1} display="flex">
+            <Mic size={16} />
+          </Box>
+          <Box w="44px" h="44px" borderRadius="full" overflow="hidden" bg={!avatarUrl ? "#e2e8f0" : "#f1f5f9"} border="1px solid" borderColor={!avatarUrl ? "#cbd5e1" : "#e2e8f0"} flexShrink={0}>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={avatarUrl || "/default-avatar.jpg"} alt={avatarName} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+          </Box>
         </Box>
       </Flex>
     </Box>

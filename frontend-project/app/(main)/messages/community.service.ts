@@ -69,11 +69,15 @@ const getCommunityMessages = async (
 ): Promise<BaseResponse<BackendCommunityMessagesData>> =>
   api.get(`/communities/${id}/messages`).then((res) => res.data);
 
-export function useBackendCommunityMessages(communityId: string | null) {
+export function useBackendCommunityMessages(
+  communityId: string | null,
+  enabled = true,
+) {
   return useQuery({
     queryKey: ["/communities", communityId, "messages"],
     queryFn: () => getCommunityMessages(communityId as string),
-    enabled: !!communityId && !(communityId as string).startsWith("local-"),
+    enabled:
+      !!communityId && enabled && !(communityId as string).startsWith("local-"),
     staleTime: 1000 * 5,
     refetchInterval: 1000 * 5,
   });
@@ -88,6 +92,39 @@ export function useMarkCommunityRead(communityId: string) {
       qc.invalidateQueries({ queryKey: ["/communities"] });
       qc.invalidateQueries({ queryKey: ["/communities", communityId, "messages"] });
     },
+  });
+}
+
+export interface CommunityPreview {
+  id: string;
+  name: string;
+  description: string;
+  avatarUrl: string | null;
+  ownerId: string;
+  createdAt: string;
+  memberCount: number;
+  ownerUsername: string | null;
+  ownerName: string | null;
+  isMember: boolean;
+  members: {
+    id: string;
+    username: string;
+    name: string;
+    avatar: string | null;
+    isAdmin: boolean;
+  }[];
+}
+
+// Info publik komunitas (tidak perlu jadi anggota): dipakai Link komunitas
+// yang dibagikan lewat chat + deep-link ?community= untuk non-anggota.
+export function useCommunityPreview(communityId: string | null) {
+  return useQuery<BaseResponse<CommunityPreview>>({
+    queryKey: ["/communities", communityId, "preview"],
+    queryFn: () =>
+      api.get(`/communities/${communityId}/preview`).then((res) => res.data),
+    enabled: !!communityId,
+    staleTime: 1000 * 15,
+    retry: false,
   });
 }
 

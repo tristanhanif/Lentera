@@ -433,6 +433,53 @@ export class CommunityService {
     return rows.slice(0, take);
   }
 
+  async previewCommunity(viewerId: string, communityId: string) {
+    const community = await this.communityRepo.findOne({
+      where: { id: communityId },
+    });
+    if (!community) {
+      throw new NotFoundException('Komunitas tidak ditemukan');
+    }
+    const [memberCount, owner, members, isMember] = await Promise.all([
+      this.memberRepo.count({ where: { communityId } }),
+      this.userRepo.findOne({
+        where: { id: community.ownerId },
+        select: ['id', 'username', 'name', 'avatar'],
+      }),
+      this.memberRepo.find({
+        where: { communityId },
+        relations: ['user'],
+        order: { createdAt: 'ASC' },
+        take: 30,
+      }),
+      this.memberRepo.findOne({
+        where: { communityId, userId: viewerId },
+        select: ['id'],
+      }),
+    ]);
+    return {
+      id: community.id,
+      name: community.name,
+      description: community.description,
+      avatarUrl: community.avatarUrl,
+      ownerId: community.ownerId,
+      createdAt: community.createdAt,
+      memberCount,
+      ownerUsername: owner?.username ?? null,
+      ownerName: owner?.name ?? null,
+      isMember: !!isMember,
+      members: members
+        .filter((mm) => mm.user)
+        .map((mm) => ({
+          id: mm.userId,
+          username: mm.user?.username ?? 'anggota',
+          name: mm.user?.name ?? 'Anggota',
+          avatar: mm.user?.avatar ?? null,
+          isAdmin: mm.userId === community.ownerId || mm.isAdmin,
+        })),
+    };
+  }
+
   async joinCommunity(userId: string, communityId: string) {
     const community = await this.communityRepo.findOne({
       where: { id: communityId },

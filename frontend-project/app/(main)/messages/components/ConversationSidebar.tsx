@@ -135,7 +135,11 @@ export default function ConversationSidebar(props: ConversationSidebarProps) {
   return (
 <VStack
           w="420px"
-          flexShrink={0}
+          // Isi sisa tinggi kolom, bukan tinggi-isi (auto): daftar di dalam
+          // yang scroll, jadi VoiceMiniPlayer selalu menetap di paling bawah
+          // (tidak terdorong melewati layar oleh baris terakhir).
+          flex={1}
+          minH={0}
           borderRight="2px solid"
           borderColor="var(--app-hover)"
           align="stretch"

@@ -31,8 +31,11 @@ import Swal from "sweetalert2";
 import { AnimatePresence, motion } from "framer-motion";
 import type { Community, CommunityMember } from "./community.store";
 import { communityAvatar } from "./community.store";
+import type { ChatConversation } from "./chat.interface";
 import CommunityInfoView from "./CommunityInfoView";
 import DMVoiceRecorder from "./components/DMVoiceRecorder";
+// Bubble VN komunitas = isi 1:1 DMVoiceBubble + header khas komunitas
+// (pp + "Kamu"/username + Admin Komunitas).
 import CommunityVoiceBubble from "./components/CommunityVoiceBubble";
 import {
   CHAT_THEMES,
@@ -54,6 +57,9 @@ interface CommunityChatViewProps {
   firstUnreadId?: string | null;
   onRead?: () => void;
   onSend: (text: string) => void;
+  // VN komunitas (ala DM/saluran): kirim blob rekaman + durasi detik.
+  onSendVoice: (blob: Blob, duration: number) => void;
+  sendingVoice?: boolean;
   onClear: () => void;
   onLeave: () => void;
   onManage?: () => void;
@@ -65,6 +71,14 @@ interface CommunityChatViewProps {
   onAddMembers: (members: CommunityMember[]) => void;
   onPromoteMember?: (memberId: string) => void;
   onRemoveMember?: (memberId: string) => void;
+  // Buletan Forward (ala Info Saluran) di kotak Info komunitas.
+  conversations?: ChatConversation[];
+  onForwardToDM?: (conversationId: string) => void;
+  // Preview link komunitas (belum jadi anggota): tanpa input, hanya ajakan
+  // gabung. onJoin = tombol Gabung di kotak ajakan.
+  notMember?: boolean;
+  joiningCommunity?: boolean;
+  onJoin?: () => void;
 }
 
 // Chat komunitas: header + menu titik tiga (Search / Chat theme / Keluar /
@@ -81,6 +95,8 @@ export default function CommunityChatView({
   firstUnreadId = null,
   onRead,
   onSend,
+  onSendVoice,
+  sendingVoice,
   onClear,
   onLeave,
   onManage,
@@ -88,8 +104,15 @@ export default function CommunityChatView({
   onAddMembers,
   onPromoteMember,
   onRemoveMember,
+  conversations = [],
+  onForwardToDM,
+  notMember = false,
+  joiningCommunity,
+  onJoin,
 }: CommunityChatViewProps) {
   const [text, setText] = useState("");
+  // VN komunitas (ala DM/saluran): mode rekaman.
+  const [recording, setRecording] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [emojiOpen, setEmojiOpen] = useState(false);
   // Info komunitas: hide percakapan, ganti kotak info. Back balik ke chat.
@@ -220,6 +243,8 @@ export default function CommunityChatView({
     setFindIndex(0);
     setShowInfo(false);
     setMenuOpen(false);
+    // Ganti komunitas -> keluar mode rekaman VN.
+    setRecording(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [community.id]);
 
@@ -423,6 +448,8 @@ export default function CommunityChatView({
           onAddMembers={onAddMembers}
           onPromoteMember={onPromoteMember}
           onRemoveMember={onRemoveMember}
+          conversations={conversations}
+          onForwardToDM={(cid) => onForwardToDM?.(cid)}
         />
       ) : themeView ? (
         // ===== Panel Chat theme (sama seperti DM) =====
@@ -496,34 +523,37 @@ export default function CommunityChatView({
                   </Text>
                 </VStack>
               </HStack>
-              <Box position="relative">
-                <IconButton aria-label="Menu komunitas" variant="ghost" size="sm" borderRadius="full" color="var(--app-muted)" _hover={{ bg: "var(--app-subtle)", color: "var(--app-text)" }} onClick={() => setMenuOpen((v) => !v)}>
-                  <EllipsisVertical size={20} />
-                </IconButton>
-                {menuOpen && <Box position="fixed" inset={0} zIndex={20} onClick={() => setMenuOpen(false)} />}
-                <AnimatePresence>
-                  {menuOpen && (
-                    <MotionBox initial={{ opacity: 0, y: -12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -12 }} transition={{ duration: 0.18, ease: "easeOut" }} position="absolute" top="calc(100% + 4px)" right={0} bg="var(--app-card)" borderRadius="xl" shadow="lg" border="1px solid" borderColor="var(--app-border)" minW="190px" py={2} zIndex={30}>
-                      {(
-                        [
-                          { label: "Search", Icon: Search },
-                          { label: "Chat theme", Icon: Paintbrush },
-                          // Block di DM → Keluar di komunitas
-                          { label: "Keluar", Icon: LogOut },
-                          { label: "Clear chat", Icon: Trash2 },
-                        ] as const
-                      ).map(({ label, Icon }) => (
-                        <Flex key={label} px={4} py={2.5} gap={3} align="center" justify="start" cursor="pointer" color="var(--app-text)" _hover={{ bg: "var(--app-hover)" }} transition="0.15s" onClick={() => handleMenuSelect(label)}>
-                          <Box color="var(--app-text)" display="flex" alignItems="center">
-                            <Icon size={16} />
-                          </Box>
-                          <Text fontSize="sm" fontWeight="medium">{label}</Text>
-                        </Flex>
-                      ))}
-                    </MotionBox>
-                  )}
-                </AnimatePresence>
-              </Box>
+                {/* Menu titik tiga hanya untuk anggota (preview link: tidak ada). */}
+                {!notMember && (
+                  <Box position="relative">
+                    <IconButton aria-label="Menu komunitas" variant="ghost" size="sm" borderRadius="full" color="var(--app-muted)" _hover={{ bg: "var(--app-subtle)", color: "var(--app-text)" }} onClick={() => setMenuOpen((v) => !v)}>
+                      <EllipsisVertical size={20} />
+                    </IconButton>
+                    {menuOpen && <Box position="fixed" inset={0} zIndex={20} onClick={() => setMenuOpen(false)} />}
+                    <AnimatePresence>
+                      {menuOpen && (
+                        <MotionBox initial={{ opacity: 0, y: -12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -12 }} transition={{ duration: 0.18, ease: "easeOut" }} position="absolute" top="calc(100% + 4px)" right={0} bg="var(--app-card)" borderRadius="xl" shadow="lg" border="1px solid" borderColor="var(--app-border)" minW="190px" py={2} zIndex={30}>
+                          {(
+                            [
+                              { label: "Search", Icon: Search },
+                              { label: "Chat theme", Icon: Paintbrush },
+                              // Block di DM → Keluar di komunitas
+                              { label: "Keluar", Icon: LogOut },
+                              { label: "Clear chat", Icon: Trash2 },
+                            ] as const
+                          ).map(({ label, Icon }) => (
+                            <Flex key={label} px={4} py={2.5} gap={3} align="center" justify="start" cursor="pointer" color="var(--app-text)" _hover={{ bg: "var(--app-hover)" }} transition="0.15s" onClick={() => handleMenuSelect(label)}>
+                              <Box color="var(--app-text)" display="flex" alignItems="center">
+                                <Icon size={16} />
+                              </Box>
+                              <Text fontSize="sm" fontWeight="medium">{label}</Text>
+                            </Flex>
+                          ))}
+                        </MotionBox>
+                      )}
+                    </AnimatePresence>
+                  </Box>
+                )}
             </Flex>
             <AnimatePresence>
               {isFinding && (
@@ -574,24 +604,27 @@ export default function CommunityChatView({
 
           {/* Isi chat (transparan di atas wallpaper) */}
           <VStack ref={scrollRef} onScroll={handleScroll} flex={1} overflowY="auto" px={6} py={6} gap={4} align="stretch" css={{ "&::-webkit-scrollbar": { width: "4px" }, "&::-webkit-scrollbar-thumb": { background: "#cbd5e1", borderRadius: "10px" } }}>
-            {/* Welcome box: kartu kecil di tengah */}
-            <Box mx="auto" w="full" maxW="300px" bg="var(--app-card)" border="1px solid" borderColor="var(--app-border)" borderRadius="2xl" shadow="sm" px={5} py={5}>
-              <VStack gap={2} align="center" textAlign="center">
-                <Box w="72px" h="72px" borderRadius="full" overflow="hidden" bg="var(--app-subtle)" border="1px solid" borderColor="var(--app-border)">
-                  <img src={communityAvatar(community.avatarUrl)} alt={community.name} className={community.avatarUrl ? undefined : "community-logo-default"} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-                </Box>
-                <Text fontWeight="black" color="var(--app-text)" fontSize="md">
-                  Selamat datang di komunitasmu!
-                </Text>
-                <Text fontSize="xs" color="var(--app-muted)" maxW="240px">
-                  Kirimkan pembaruan administratif penting kepada semua anggota Anda sekaligus.
-                </Text>
-                <Box h="1px" w="full" bg="var(--app-border)" my={2} />
-                <Box as="button" fontSize="sm" fontWeight="bold" color="blue.600" cursor="pointer" onClick={() => { setShowInfo(true); onManage?.(); }}>
-                  Mengelola Komunitas
-                </Box>
-              </VStack>
-            </Box>
+            {/* Welcome box: kartu kecil di tengah (hanya untuk anggota).
+                Preview link: disembunyikan, diganti kartu ajakan gabung. */}
+            {!notMember && (
+              <Box mx="auto" w="full" maxW="300px" bg="var(--app-card)" border="1px solid" borderColor="var(--app-border)" borderRadius="2xl" shadow="sm" px={5} py={5}>
+                <VStack gap={2} align="center" textAlign="center">
+                  <Box w="72px" h="72px" borderRadius="full" overflow="hidden" bg="var(--app-subtle)" border="1px solid" borderColor="var(--app-border)">
+                    <img src={communityAvatar(community.avatarUrl)} alt={community.name} className={community.avatarUrl ? undefined : "community-logo-default"} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                  </Box>
+                  <Text fontWeight="black" color="var(--app-text)" fontSize="md">
+                    Selamat datang di komunitasmu!
+                  </Text>
+                  <Text fontSize="xs" color="var(--app-muted)" maxW="240px">
+                    Kirimkan pembaruan administratif penting kepada semua anggota Anda sekaligus.
+                  </Text>
+                  <Box h="1px" w="full" bg="var(--app-border)" my={2} />
+                  <Box as="button" fontSize="sm" fontWeight="bold" color="blue.600" cursor="pointer" onClick={() => { setShowInfo(true); onManage?.(); }}>
+                    Mengelola Komunitas
+                  </Box>
+                </VStack>
+              </Box>
+            )}
 
             {/* Bubble satuan: avatar kiri atas + nama/role + isi pesan dalam satu kotak, tanpa garis. */}
             {community.messages.map((m) => {
@@ -654,10 +687,31 @@ export default function CommunityChatView({
               const mine = m.senderId === currentUserId || m.isMine;
               const memberInfo = (community.members ?? []).find((mm) => mm.id === m.senderId);
               const isAdminSender = m.senderId === community.ownerId || !!memberInfo?.isAdmin;
-              const displayName = mine ? "You" : memberInfo?.username || m.senderName || currentUsername;
+              const displayName = mine ? "Kamu" : memberInfo?.username || m.senderName || currentUsername;
               const avatarSrc = mine
                 ? currentAvatar || memberInfo?.avatar || "/default-avatar.jpg"
                 : memberInfo?.avatar || "/default-avatar.jpg";
+              // VN komunitas (ala DM/saluran): bubble VN menggantikan bubble teks.
+              if (m.audioUrl) {
+                return (
+                  <Fragment key={m.id}>
+                    {newLabel}
+                    <Flex justify={mine ? "flex-end" : "flex-start"}>
+                      <CommunityVoiceBubble
+                        id={m.id}
+                        url={m.audioUrl}
+                        duration={m.voiceDuration ?? 0}
+                        avatarUrl={mine ? currentAvatar || memberInfo?.avatar || null : memberInfo?.avatar || null}
+                        avatarName={displayName}
+                        displayName={mine ? "Kamu" : displayName}
+                        isAdmin={isAdminSender}
+                        createdAt={m.createdAt}
+                        sourceKey={`community:${community.id}`}
+                      />
+                    </Flex>
+                  </Fragment>
+                );
+              }
               const q = findQuery.trim().toLowerCase();
               const isMatch = isFinding && !!q && m.text.toLowerCase().includes(q);
               const isActive = isMatch && m.id === findActiveId;
@@ -717,9 +771,40 @@ export default function CommunityChatView({
             <Box ref={bottomRef} h="1px" w="full" flexShrink={0} />
           </VStack>
 
-          {/* Kotak Ketik pesan... */}
+          {/* Ajakan gabung: pengganti kotak Ketik pesan... untuk yang belum
+              jadi anggota (hasil Copy link / deep-link komunitas). */}
+          {notMember ? (
+            <Box p={4} flexShrink={0}>
+              <Box bg="var(--app-card)" border="1px solid" borderColor="var(--app-border)" borderRadius="2xl" shadow="sm" px={5} py={4}>
+                <VStack gap={2} align="center" textAlign="center">
+                  <Box w="52px" h="52px" borderRadius="full" overflow="hidden" bg="var(--app-subtle)" border="1px solid" borderColor="var(--app-border)">
+                    <img src={communityAvatar(community.avatarUrl)} alt={community.name} className={community.avatarUrl ? undefined : "community-logo-default"} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                  </Box>
+                  <Text fontSize="sm" fontWeight="bold" color="var(--app-text)">
+                    Kamu belum bergabung ke komunitas ini
+                  </Text>
+                  <Text fontSize="xs" color="var(--app-muted)">
+                    Gabung dulu yuk, biar bisa lihat dan kirim pesan di komunitas {community.name}.
+                  </Text>
+                  <Button
+                    w="full"
+                    bg="blue.600"
+                    color="white"
+                    borderRadius="xl"
+                    h="44px"
+                    fontWeight="bold"
+                    _hover={{ bg: "blue.700" }}
+                    loading={joiningCommunity}
+                    onClick={onJoin}
+                  >
+                    Gabung
+                  </Button>
+                </VStack>
+              </Box>
+            </Box>
+          ) : (
           <Box p={4} flexShrink={0} bg="transparent">
-            {emojiOpen && (
+            {!recording && emojiOpen && (
               <Flex wrap="wrap" gap={1} mb={2} p={2} bg="var(--app-card)" border="1px solid" borderColor="var(--app-border)" borderRadius="xl">
                 {EMOJIS.map((em) => (
                   <Box key={em} as="button" fontSize="20px" p={1} borderRadius="md" cursor="pointer" _hover={{ bg: "var(--app-hover)" }} onClick={() => setText((t) => t + em)}>
@@ -728,34 +813,82 @@ export default function CommunityChatView({
                 ))}
               </Flex>
             )}
-            <HStack gap={2} align="center">
-              <HStack flex={1} bg="var(--app-card)" border="1px solid" borderColor="var(--app-border)" borderRadius="full" px={3} py={1} gap={1}>
-                <Input
-                  ref={inputRef}
-                  value={text}
-                  onChange={(e) => setText(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") handleSend();
+            {recording ? (
+              <HStack gap={2} align="center">
+                <HStack flex={1} bg="var(--app-card)" border="1px solid" borderColor="var(--app-border)" borderRadius="full" px={3} py={1} gap={1} minW={0}>
+                  <DMVoiceRecorder
+                    sendEvent="lentera:send-community-vn"
+                    onCancel={() => setRecording(false)}
+                    onSend={onSendVoice}
+                  />
+                </HStack>
+                <IconButton
+                  bg="blue.600"
+                  color="white"
+                  borderRadius="full"
+                  w="40px"
+                  h="40px"
+                  flexShrink={0}
+                  shadow="lg"
+                  _hover={{ bg: "blue.700" }}
+                  aria-label="Kirim VN"
+                  loading={sendingVoice}
+                  onClick={() => {
+                    window.dispatchEvent(new CustomEvent("lentera:send-community-vn"));
                   }}
-                  placeholder="Ketik pesan..."
-                  fontSize="sm"
-                  color="var(--app-text)"
-                  border="none"
-                  bg="transparent"
-                  p={0}
-                  h="36px"
-                  _placeholder={{ color: "var(--app-faint)" }}
-                  _focus={{ boxShadow: "none" }}
-                />
-                <IconButton aria-label="Emoji" variant="ghost" size="xs" borderRadius="full" color="var(--app-muted)" _hover={{ bg: "var(--app-subtle)" }} onClick={() => setEmojiOpen((v) => !v)}>
-                  <Smile size={18} />
+                >
+                  <Send size={18} />
                 </IconButton>
               </HStack>
-              <IconButton bg="blue.600" color="white" borderRadius="full" w="40px" h="40px" flexShrink={0} shadow="lg" _hover={{ bg: "blue.700" }} aria-label="Kirim" onClick={handleSend} disabled={!text.trim()}>
-                <Send size={18} />
-              </IconButton>
-            </HStack>
+            ) : (
+              <HStack gap={2} align="center">
+                <HStack flex={1} bg="var(--app-card)" border="1px solid" borderColor="var(--app-border)" borderRadius="full" px={3} py={1} gap={1}>
+                  <Input
+                    ref={inputRef}
+                    value={text}
+                    onChange={(e) => setText(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") handleSend();
+                    }}
+                    placeholder="Ketik pesan..."
+                    fontSize="sm"
+                    color="var(--app-text)"
+                    border="none"
+                    bg="transparent"
+                    p={0}
+                    h="36px"
+                    _placeholder={{ color: "var(--app-faint)" }}
+                    _focus={{ boxShadow: "none" }}
+                  />
+                  <IconButton aria-label="Emoji" variant="ghost" size="xs" borderRadius="full" color="var(--app-muted)" _hover={{ bg: "var(--app-subtle)" }} onClick={() => setEmojiOpen((v) => !v)}>
+                    <Smile size={18} />
+                  </IconButton>
+                </HStack>
+                {/* Buletan biru: ada isi -> kirim, kosong -> mic (ala DM/saluran). */}
+                {text.trim() ? (
+                  <IconButton bg="blue.600" color="white" borderRadius="full" w="40px" h="40px" flexShrink={0} shadow="lg" _hover={{ bg: "blue.700" }} aria-label="Kirim" onClick={handleSend} disabled={!text.trim()} loading={sendingVoice}>
+                    <Send size={18} />
+                  </IconButton>
+                ) : (
+                  <IconButton
+                    bg="blue.600"
+                    color="white"
+                    borderRadius="full"
+                    w="40px"
+                    h="40px"
+                    flexShrink={0}
+                    shadow="lg"
+                    _hover={{ bg: "blue.700" }}
+                    aria-label="Rekam VN"
+                    onClick={() => setRecording(true)}
+                  >
+                    <Mic size={18} />
+                  </IconButton>
+                )}
+              </HStack>
+            )}
           </Box>
+          )}
 
           {/* Konfirmasi Clear chat di tengah, sama seperti DM */}
           <AnimatePresence>

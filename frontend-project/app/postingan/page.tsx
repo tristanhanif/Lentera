@@ -839,8 +839,7 @@ export default function PostinganPage() {
                 <Link as={NextLink} href="/profile">
                   <Text
                     fontWeight="bold"
-                    color="blue.900"
-                    _hover={{ textDecoration: "underline" }}
+                    color="white"
                   >
                     {profile?.username || displayName}
                   </Text>

@@ -77,6 +77,7 @@ import DMVoiceBubble from "./components/DMVoiceBubble";
 import DMVoiceRecorder from "./components/DMVoiceRecorder";
 import NotesRail from "./components/NotesRail";
 import ConversationSidebar from "./components/ConversationSidebar";
+import VoiceMiniPlayer from "./components/VoiceMiniPlayer";
 import {
   parseAsUTC,
   formatWIBTime,
@@ -96,6 +97,7 @@ import {
   isNoteReplyExpired,
   getFindMatchInfo,
   formatBadge4,
+  extractCommunityId,
 } from "./utils/chat-helpers";
 import { MAX_DM_VN_SECS } from "./utils/dm-voice";
 import { MusicPlayingIcon } from "./NotesBar";
@@ -103,6 +105,7 @@ import NoteEditor from "./NoteEditor";
 import TeraChatView from "./TeraChatView";
 import CommunityCreateView from "./CommunityCreateView";
 import CommunityChatView from "./CommunityChatView";
+import CommunityLinkBubble from "./components/CommunityLinkBubble";
 import ChannelCreateView from "./ChannelCreateView";
 import ChannelChatView from "./ChannelChatView";
 import {
@@ -115,6 +118,7 @@ import {
 import {
   useBackendCommunities,
   useBackendCommunityMessages,
+  useCommunityPreview,
   useCreateBackendCommunity,
   useUpdateBackendCommunity,
   useSendBackendCommunityMessage,
@@ -217,8 +221,25 @@ function MessagesPage() {
     selectedCommunityId && isBackendCommunityId(selectedCommunityId)
       ? selectedCommunityId
       : null;
+  // Komunitas yang dipilih ada di daftar anggota (backend / lokal)?
+  // Kalau tidak ada -> mode Preview link (hasil Copy link yang dibagikan).
+  const selectedBackendCommunity = selectedCommunityId
+    ? backendCommunities.find((c) => c.id === selectedCommunityId) ?? null
+    : null;
+  const selectedLocalCommunity = selectedCommunityId
+    ? communities.find((c) => c.id === selectedCommunityId) ?? null
+    : null;
+  const communityPreviewId =
+    selectedCommunityId &&
+    !selectedBackendCommunity &&
+    !selectedLocalCommunity &&
+    isBackendCommunityId(selectedCommunityId)
+      ? selectedCommunityId
+      : null;
+  const { data: communityPreviewData, isLoading: communityPreviewLoading } =
+    useCommunityPreview(communityPreviewId);
   const { data: backendMessagesData } =
-    useBackendCommunityMessages(selectedBackendId);
+    useBackendCommunityMessages(selectedBackendId, !communityPreviewId);
   const createBackendCommunityMutation = useCreateBackendCommunity();
   const updateBackendCommunityMutation = useUpdateBackendCommunity(
     selectedBackendId ?? "",
@@ -432,8 +453,9 @@ function MessagesPage() {
   const attachmentSeq = useRef(0);
   // VN DM (ala saluran): mode rekaman + id VN yang lagi diputar + status kirim.
   const [dmRecording, setDmRecording] = useState(false);
-  const [dmPlayingId, setDmPlayingId] = useState<string | null>(null);
   const [dmSendingVoice, setDmSendingVoice] = useState(false);
+  // VN komunitas (ala DM): status upload/kirim rekaman komunitas.
+  const [communitySendingVoice, setCommunitySendingVoice] = useState(false);
   // Kotak postingan di chat dipencet -> ambil detail + buka kotak besar.
   const [sharedPostId, setSharedPostId] = useState<string | null>(null);
   const {
@@ -567,12 +589,7 @@ function MessagesPage() {
   }, [messages, isFinding]);
 
   // Ganti obrolan dari jalur mana pun (klik list, balas catatan, deep-link):
-  // hentikan mode rekaman VN DM + putar VN biar tidak nyangkut di obrolan lama.
-  useEffect(() => {
-    setDmRecording(false);
-    setDmPlayingId(null);
-    setDmSendingVoice(false);
-  }, [selectedConversation]);
+  // hentikan mode rekaman VN DM (VN yang diputar tetap jalan — mini-player global).
 
   // Membuka obrolan = membaca pesan. GET messages sudah menandai isRead=true
   // di server, jadi refresh daftar percakapan supaya badge merah ikut hilang.
@@ -603,7 +620,6 @@ function MessagesPage() {
     setAttachment(null);
     setEmojiOpen(false);
     setDmRecording(false);
-    setDmPlayingId(null);
     setDmSendingVoice(false);
     // Ganti obrolan -> keluar dari mode Find + Theme.
     setIsFinding(false);
@@ -617,6 +633,50 @@ function MessagesPage() {
     clearConversationUnread(queryClient, convId);
   };
 
+  // Buka komunitas dari kartu link di bubble DM / deep-link ?community=:
+  // anggota langsung masuk chat, non-anggota mode preview + ajakan gabung
+  // (yg di CommunityChatView). local- = komunitas localStorage masing-masing
+  // akun, tidak bisa dibuka dari akun lain.
+  const openCommunityFromLink = (cid: string) => {
+    if (cid.startsWith("local-")) {
+      Swal.fire({
+        icon: "info",
+        title: "Komunitas tidak tersedia via link",
+        text: "Komunitas ini hanya tersimpan di akun pembuatnya.",
+        timer: 2200,
+        showConfirmButton: false,
+      });
+      return;
+    }
+    setSelectedConversation(null);
+    setOwnNoteView(null);
+    setCommunityCreateOpen(false);
+    setSelectedCommunityId(cid);
+    setChannelCreateOpen(false);
+    setSelectedChannelId(null);
+    setActiveFilter("komunitas");
+  };
+
+  const handleJoinPreviewCommunity = () => {
+    if (!communityPreviewId || joinCommunityMutation.isPending) return;
+    joinCommunityMutation.mutate(communityPreviewId, {
+      onSuccess: () => {
+        Swal.fire({
+          icon: "success",
+          title: "Berhasil gabung ke komunitas",
+          timer: 1500,
+          showConfirmButton: false,
+        });
+      },
+      onError: (err: unknown) => {
+        const msg =
+          (err as { response?: { data?: { message?: string } } })?.response
+            ?.data?.message || "Gagal bergabung ke komunitas";
+        Swal.fire({ title: "Gagal", text: msg, icon: "error", timer: 2200, showConfirmButton: false });
+      },
+    });
+  };
+
   // Deep-link: Tera AI (?chat=tera-ai) + komunitas (?community=:id dari notif).
   useEffect(() => {
     try {
@@ -627,24 +687,17 @@ function MessagesPage() {
         window.history.replaceState(null, "", "/messages");
       } else if (params.get("community")) {
         const cid = params.get("community") as string;
-        setSelectedConversation(null);
-        setOwnNoteView(null);
-        setCommunityCreateOpen(false);
-        setSelectedCommunityId(cid);
-        setChannelCreateOpen(false);
-        setSelectedChannelId(null);
-        setActiveFilter("komunitas");
         window.history.replaceState(null, "", "/messages");
+        openCommunityFromLink(cid);
       } else if (params.get("channel")) {
         const chid = params.get("channel") as string;
+        window.history.replaceState(null, "", "/messages");
         setSelectedConversation(null);
         setOwnNoteView(null);
         setCommunityCreateOpen(false);
-        setSelectedCommunityId(null);
-        setChannelCreateOpen(false);
         setSelectedChannelId(chid);
+        setSelectedCommunityId(null);
         setActiveFilter("saluran");
-        window.history.replaceState(null, "", "/messages");
       }
     } catch {
       // abaikan kalau URL tidak bisa dibaca
@@ -1034,6 +1087,58 @@ function MessagesPage() {
     }
   };
 
+  // Kirim VN komunitas (ala DM/saluran): upload dulu ke /upload/file,
+  // lalu kirim audioUrl + durasi. Komunitas backend -> POST /communities/:id/messages,
+  // komunitas lokal legacy -> simpan langsung ke localStorage.
+  const handleSendCommunityVoice = async (blob: Blob, secs: number) => {
+    if (!selectedCommunityId || communitySendingVoice) return;
+    setCommunitySendingVoice(true);
+    try {
+      const audioUrl = await uploadChatVoice(blob);
+      const voiceDuration = Math.min(Math.max(1, Math.round(secs)), MAX_DM_VN_SECS);
+      const isBackend = !!backendCommunities.find((c) => c.id === selectedCommunityId);
+      if (isBackend) {
+        await sendBackendCommunityMutation.mutateAsync({
+          text: VOICE_SHARE_DEFAULT_TEXT,
+          audioUrl,
+          voiceDuration,
+        });
+      } else {
+        const now = new Date().toISOString();
+        persistCommunities(
+          communities.map((c) =>
+            c.id === selectedCommunityId
+              ? {
+                  ...c,
+                  messages: [
+                    ...c.messages,
+                    {
+                      id: `m-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+                      senderId: currentUserId,
+                      senderName: profile?.username ?? "saya",
+                      isMine: true,
+                      text: VOICE_SHARE_DEFAULT_TEXT,
+                      createdAt: now,
+                      audioUrl,
+                      voiceDuration,
+                    },
+                  ],
+                }
+              : c,
+          ),
+        );
+      }
+    } catch (err: unknown) {
+      const msg =
+        (err as Error)?.message ||
+        (err as { response?: { data?: { message?: string } } })?.response?.data?.message ||
+        "Gagal mengirim VN";
+      Swal.fire({ title: "Gagal", text: msg, icon: "error", timer: 2200, showConfirmButton: false });
+    } finally {
+      setCommunitySendingVoice(false);
+    }
+  };
+
   const handleKeyPress = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -1197,6 +1302,70 @@ function MessagesPage() {
     !themeView &&
     ownNoteView !== "editor";
 
+  // Konteks pane yang terbuka sekarang (untuk VoiceMiniPlayer): sama dengan
+  // sourceKey yang dipasang bubble VN saat mulai diputar. Kalau sama berarti
+  // user masih berada di percakapan asal VN → kotak mini disembunyikan.
+  // null = tidak ada chat terbuka (menatap daftar Pesan/Komunitas/Saluran)
+  // → kotak mini selalu tampil di bawah daftar.
+  const activeContextKey = selectedConversation
+    ? `dm:${selectedConversation}`
+    : selectedCommunityId
+      ? `community:${selectedCommunityId}`
+      : selectedChannelId
+        ? `channel:${selectedChannelId}`
+        : null;
+
+  // Pencet pp avatar di mini-player VN → lompat ke chat asal VN (DM /
+  // komunitas / saluran). Semua bersih-bersih ala handleSelectConversation
+  // biar panel kanan tidak nyangkut state menu/theme/recorder sebelumnya.
+  const handleOpenVoiceSource = (sourceKey: string) => {
+    const sep = sourceKey.indexOf(":");
+    const kind = sep === -1 ? "" : sourceKey.slice(0, sep);
+    const id = sep === -1 ? "" : sourceKey.slice(sep + 1);
+    if (!id) return;
+    if (kind === "dm") {
+      setActiveFilter("pesan");
+      handleSelectConversation(id);
+      return;
+    }
+    if (kind === "community") {
+      setActiveFilter("komunitas");
+      setSelectedConversation(null);
+      setOwnNoteView(null);
+      setCommunityCreateOpen(false);
+      setSelectedCommunityId(id);
+      setChannelCreateOpen(false);
+      setSelectedChannelId(null);
+      closeMenu();
+      setHeaderMenuOpen(false);
+      setClearConfirmOpen(false);
+      setReplyTo(null);
+      setAttachment(null);
+      setEmojiOpen(false);
+      setDmRecording(false);
+      setThemeView(null);
+      return;
+    }
+    if (kind === "channel") {
+      setActiveFilter("saluran");
+      setSelectedConversation(null);
+      setOwnNoteView(null);
+      setCommunityCreateOpen(false);
+      setSelectedCommunityId(null);
+      setChannelCreateOpen(false);
+      setSelectedChannelId(id);
+      closeMenu();
+      setHeaderMenuOpen(false);
+      setClearConfirmOpen(false);
+      setReplyTo(null);
+      setAttachment(null);
+      setEmojiOpen(false);
+      setDmRecording(false);
+      setThemeView(null);
+      return;
+    }
+  };
+
   return (
     <Box
       h="calc(100vh - 140px)"
@@ -1223,6 +1392,8 @@ function MessagesPage() {
           onLeaveHover={scheduleHideHover}
         />
 
+        {/* Kolom kiri: daftar percakapan + mini-player VN global di bawahnya. */}
+        <VStack gap={0} align="stretch" h="full" minW={0}>
         <ConversationSidebar
           searchQuery={searchQuery}
           setSearchQuery={setSearchQuery}
@@ -1330,6 +1501,8 @@ function MessagesPage() {
           joinCommunityMutation={joinCommunityMutation}
           followChannelMutation={followChannelMutation}
         />
+          <VoiceMiniPlayer contextKey={activeContextKey} onOpenSource={handleOpenVoiceSource} />
+        </VStack>
 
         {/* KANAN: WINDOW CHAT / EDITOR CATATAN.
             Saat chat biasa, wallpaper memenuhi kolom kanan (header solid,
@@ -1529,6 +1702,9 @@ function MessagesPage() {
                 text: m.text,
                 createdAt: typeof m.createdAt === "string" ? m.createdAt : new Date(m.createdAt).toISOString(),
                 isEvent: m.isEvent,
+                // VN komunitas (ala DM/saluran): ikutkan audio + durasi.
+                audioUrl: m.audioUrl ?? null,
+                voiceDuration: m.voiceDuration ?? null,
               }));
               const adapted: Community = {
                 id: selectedBackend.id,
@@ -1563,6 +1739,8 @@ function MessagesPage() {
                   onSend={(txt) => {
                     sendBackendCommunityMutation.mutate(txt);
                   }}
+                  onSendVoice={handleSendCommunityVoice}
+                  sendingVoice={communitySendingVoice}
                   onClear={() => {
                     clearBackendCommunityMutation.mutate(undefined);
                   }}
@@ -1607,6 +1785,24 @@ function MessagesPage() {
                       },
                     });
                   }}
+                  conversations={conversations}
+                  onForwardToDM={(conversationId) => {
+                    const link = `${window.location.origin}/messages?community=${encodeURIComponent(selectedBackend.id)}`;
+                    sendMessageMutation.mutate(
+                      {
+                        conversationId,
+                        text: `Ikuti komunitas ${selectedBackend.name}: ${link}`,
+                      },
+                      {
+                        onSuccess: () => {
+                          Swal.fire({ icon: "success", title: "Diteruskan ke chat", timer: 1500, showConfirmButton: false });
+                        },
+                        onError: () => {
+                          Swal.fire({ icon: "error", title: "Gagal meneruskan", timer: 1800, showConfirmButton: false });
+                        },
+                      },
+                    );
+                  }}
                 />
               );
             }
@@ -1642,6 +1838,8 @@ function MessagesPage() {
                       ),
                     );
                   }}
+                  onSendVoice={handleSendCommunityVoice}
+                  sendingVoice={communitySendingVoice}
                   onClear={() => {
                     persistCommunities(
                       communities.map((c) => (c.id === selectedCommunity.id ? { ...c, messages: [] } : c)),
@@ -1691,6 +1889,100 @@ function MessagesPage() {
                       }),
                     );
                   }}
+                  conversations={conversations}
+                  onForwardToDM={(conversationId) => {
+                    const link = `${window.location.origin}/messages?community=${encodeURIComponent(selectedCommunity.id)}`;
+                    sendMessageMutation.mutate(
+                      {
+                        conversationId,
+                        text: `Ikuti komunitas ${selectedCommunity.name}: ${link}`,
+                      },
+                      {
+                        onSuccess: () => {
+                          Swal.fire({ icon: "success", title: "Diteruskan ke chat", timer: 1500, showConfirmButton: false });
+                        },
+                        onError: () => {
+                          Swal.fire({ icon: "error", title: "Gagal meneruskan", timer: 1800, showConfirmButton: false });
+                        },
+                      },
+                    );
+                  }}
+                />
+              );
+            }
+            // Bukan anggota / komunitas belum ada di daftar -> Preview link:
+            // info publik + ajakan gabung (hasil Copy link yang dibagikan).
+            if (communityPreviewId) {
+              if (communityPreviewLoading) {
+                return (
+                  <Flex flex={1} justify="center" align="center" bg="var(--app-card)">
+                    <Spinner size="md" color="blue.500" />
+                  </Flex>
+                );
+              }
+              const pv = communityPreviewData?.data ?? null;
+              if (!pv) {
+                return (
+                  <Flex flex={1} direction="column" justify="center" align="center" bg="var(--app-card)" gap={2} p={6}>
+                    <Text fontSize="sm" fontWeight="bold" color="var(--app-text)">
+                      Komunitas tidak ditemukan
+                    </Text>
+                    <Text fontSize="xs" color="var(--app-muted)" textAlign="center">
+                      Link komunitas ini sudah tidak tersedia.
+                    </Text>
+                  </Flex>
+                );
+              }
+              const previewCommunity: Community = {
+                id: pv.id,
+                name: pv.name,
+                description: pv.description,
+                avatarUrl: pv.avatarUrl,
+                ownerId: pv.ownerId,
+                createdAt: typeof pv.createdAt === "string" ? pv.createdAt : new Date(pv.createdAt).toISOString(),
+                messages: [],
+                members: pv.members.map((m) => ({
+                  id: m.id,
+                  username: m.username,
+                  name: m.name,
+                  avatar: m.avatar ?? null,
+                  isAdmin: m.isAdmin,
+                })),
+              };
+              return (
+                <CommunityChatView
+                  community={previewCommunity}
+                  currentUserId={currentUserId}
+                  currentUsername={profile?.username ?? "saya"}
+                  currentAvatar={profile?.avatar ?? null}
+                  currentName={profile?.name ?? profile?.username ?? "saya"}
+                  onSend={() => {}}
+                  onSendVoice={() => {}}
+                  onClear={() => {}}
+                  onLeave={() => {}}
+                  onUpdateCommunity={() => {}}
+                  onAddMembers={() => {}}
+                  conversations={conversations}
+                  onForwardToDM={(conversationId) => {
+                    const link = `${window.location.origin}/messages?community=${encodeURIComponent(pv.id)}`;
+                    sendMessageMutation.mutate(
+                      {
+                        conversationId,
+                        text: `Ikuti komunitas ${pv.name}: ${link}`,
+                      },
+                      {
+                        onSuccess: () => {
+                          Swal.fire({ icon: "success", title: "Diteruskan ke chat", timer: 1500, showConfirmButton: false });
+                        },
+                        onError: () => {
+                          Swal.fire({ icon: "error", title: "Gagal meneruskan", timer: 1800, showConfirmButton: false });
+                        },
+                      },
+                    );
+                  }}
+                  notMember={!pv.isMember}
+                  joiningCommunity={joinCommunityMutation.isPending}
+                  onJoin={handleJoinPreviewCommunity}
                 />
               );
             }
@@ -2361,6 +2653,11 @@ function MessagesPage() {
                       // Outline oranye di bubble hanya kalau teksnya yang cocok.
                       // Kalau yang cocok nama dokumen, outline pindah ke kartu dokumen.
                       const isActiveTextFind = isActiveFind && isTextFindMatch;
+                      // Kartu link komunitas: hanya di bubble teks yang tidak dihapus/VN.
+                      const linkCommunityId =
+                        !msg.isDeleted && !msg.audioUrl
+                          ? extractCommunityId(msg.text)
+                          : null;
                       return (
                         <Fragment key={msg.id}>
                           {dateSeparator}
@@ -2620,6 +2917,15 @@ function MessagesPage() {
                                     ? renderFoundText(msg.text, isActiveTextFind)
                                     : msg.text}
                               </Text>
+                              {/* Kartu link komunitas (hasil Copy link yang
+                                  dikirim lewat Forward ke chat): dipencet ->
+                                  masuk ke kotak percakapan komunitas itu. */}
+                              {linkCommunityId && (
+                                <CommunityLinkBubble
+                                  communityId={linkCommunityId}
+                                  onOpen={openCommunityFromLink}
+                                />
+                              )}
                             </Box>
                             )}
                             {/* Bubble VN DM: jenisnya ngikutin bubble VN saluran,
@@ -2655,14 +2961,13 @@ function MessagesPage() {
                                   </Box>
                                 )}
                                 <DMVoiceBubble
+                                  id={msg.id}
                                   url={msg.audioUrl}
                                   duration={msg.voiceDuration ?? 0}
-                                  playing={dmPlayingId === msg.id}
-                                  onPlay={() => setDmPlayingId(msg.id)}
-                                  onPause={() => setDmPlayingId((prev) => (prev === msg.id ? null : prev))}
                                   avatarUrl={msg.sender?.avatar ?? null}
                                   avatarName={msg.sender?.username ?? msg.sender?.name ?? "VN"}
                                   createdAt={msg.createdAt}
+                                  sourceKey={`dm:${selectedConversation}`}
                                 />
                               </VStack>
                             )}

@@ -29,6 +29,11 @@ import {
 import Swal from "sweetalert2";
 import { AnimatePresence, motion } from "framer-motion";
 import {
+  toggleVoice,
+  useIsVoicePlaying,
+  useVoicePlayback,
+} from "./utils/voice-player";
+import {
   channelAvatar,
   formatVoiceDuration,
   useReactChannelMessage,
@@ -662,14 +667,13 @@ function TextBubble({
 
 // ===== Bubble VN: icon play/pause adaptif tema + gelombang biru + mic & avatar =====
 function VoiceBubble({
+  id,
   url,
   duration,
-  playing,
-  onPlay,
-  onPause,
   avatarUrl,
   avatarName,
   createdAt,
+  sourceKey,
   withMenu,
   linkText,
   reactions,
@@ -678,14 +682,15 @@ function VoiceBubble({
   onReact,
   isPreview = false,
 }: {
+  id: string;
   url: string;
   duration: number;
-  playing: boolean;
-  onPlay: () => void;
-  onPause: () => void;
   avatarUrl: string | null;
   avatarName: string;
   createdAt: string;
+  // Konteks saluran tempat bubble ini berada ("channel:<id>") — dipakai
+  // VoiceMiniPlayer untuk menyembunyikan kotak mini saat user masih di sini.
+  sourceKey?: string | null;
   withMenu: boolean;
   linkText?: string | null;
   reactions?: ChannelMessageReactionGroup[];
@@ -694,10 +699,12 @@ function VoiceBubble({
   onReact?: (emoji: string) => void;
   isPreview?: boolean;
 }) {
-  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const playingId = useIsVoicePlaying(id);
+  const globalPlayback = useVoicePlayback(id);
+  const playingNow = playingId;
+  const elapsedNow = globalPlayback.elapsed;
+  const progress = globalPlayback.progress;
   const [peaks, setPeaks] = useState<number[]>([]);
-  const [progress, setProgress] = useState(0);
-  const [elapsed, setElapsed] = useState(0);
   const [showDetail, setShowDetail] = useState(false);
   const list = reactions ?? [];
   const reactionTotal = totalReactions ?? 0;
@@ -714,26 +721,6 @@ function VoiceBubble({
       live = false;
     };
   }, [url]);
-
-  useEffect(() => {
-    const a = audioRef.current;
-    if (!a) return;
-    if (playing) {
-      a.play().catch(() => onPause());
-    } else {
-      a.pause();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [playing]);
-
-  useEffect(
-    () => () => {
-      try {
-        audioRef.current?.pause();
-      } catch {}
-    },
-    [],
-  );
 
   const total = Math.max(1, duration);
   const pct = Math.min(1, Math.max(0, progress));
@@ -753,48 +740,36 @@ function VoiceBubble({
       position="relative"
       {...bubbleHoverProps}
     >
-      <audio
-        ref={audioRef}
-        src={url}
-        preload="metadata"
-        onTimeUpdate={(e) => {
-          const t = e.currentTarget;
-          setElapsed(t.currentTime);
-          setProgress(t.duration ? t.currentTime / t.duration : 0);
-        }}
-        onEnded={() => {
-          setProgress(0);
-          setElapsed(0);
-          onPause();
-        }}
-      />
       <Flex align="center" gap={2.5}>
         {/* Play/pause: selalu hitam karena bubble selalu putih (samain bubble teks) */}
         <Box
           as="button"
-          aria-label={playing ? "Jeda VN" : "Putar VN"}
+          aria-label={playingNow ? "Jeda VN" : "Putar VN"}
           color="black"
           display="flex"
           alignItems="center"
           justifyContent="center"
           cursor="pointer"
           flexShrink={0}
-          onClick={() => (playing ? onPause() : onPlay())}
+          onClick={() => void toggleVoice(id, url, avatarName, avatarUrl, sourceKey ?? null)}
         >
-          {playing ? <Pause size={22} /> : <Play size={22} />}
+          {playingNow ? <Pause size={22} /> : <Play size={22} />}
         </Box>
         {/* Gelombang + durasi: durasi rata kiri sejajar gelombang */}
         <VStack flex={1} minW={0} align="stretch" gap={1}>
           <Box position="relative" h="36px">
-            <Flex align="center" justify="center" gap="2px" h="full">
+            {/* Bar menyusut mengikuti lebar area (flex:1) supaya waveform
+                tidak meluber menumpuk icon play & avatar (sama kayak DM). */}
+            <Flex align="center" gap="2px" h="full">
               {(peaks.length ? peaks : Array.from({ length: 48 }, () => 0.4)).map((p, i, arr) => (
                 <Box
                   key={i}
-                  w="3px"
+                  flex={1}
+                  minW="1px"
+                  maxW="4px"
                   borderRadius="full"
                   bg={i / arr.length <= pct ? "blue.500" : "#cbd5e1"}
                   style={{ height: `${Math.round(p * 100)}%` }}
-                  flexShrink={0}
                 />
               ))}
             </Flex>
@@ -813,8 +788,8 @@ function VoiceBubble({
           {/* Selalu hitam / abu tua karena bubble selalu putih (samain bubble teks) */}
           <Flex justify="space-between" align="center">
             <Text fontSize="xs" color="black" fontWeight="medium" textAlign="left">
-              {playing && elapsed > 0.3
-                ? `${formatVoiceDuration(elapsed)} / ${formatVoiceDuration(total)}`
+              {playingNow && elapsedNow > 0.3
+                ? `${formatVoiceDuration(elapsedNow)} / ${formatVoiceDuration(total)}`
                 : formatVoiceDuration(total)}
             </Text>
             <Text fontSize="11px" color="#64748b">
@@ -1371,7 +1346,6 @@ export default function ChannelChatView({
   const [text, setText] = useState("");
   const [menuOpen, setMenuOpen] = useState(false);
   const [recording, setRecording] = useState(false);
-  const [playingId, setPlayingId] = useState<string | null>(null);
   const [confirmUnfollow, setConfirmUnfollow] = useState(false);
   const [showInfo, setShowInfo] = useState(false);
   const reactMutation = useReactChannelMessage(channel.id);
@@ -1403,7 +1377,6 @@ export default function ChannelChatView({
     initialUnreadRef.current = unreadCount ?? 0;
     setShowNewLabel((unreadCount ?? 0) > 0 && !!firstUnreadId);
     atBottomRef.current = !firstUnreadId;
-    setPlayingId(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [channel.id]);
 
@@ -1637,14 +1610,13 @@ export default function ChannelChatView({
               <Flex justify="center" id={`chmsg-${m.id}`} pb={!isPreview && (m.totalReactions ?? 0) > 0 ? 3 : 0}>
                 {m.kind === "voice" && m.audioUrl ? (
                   <VoiceBubble
+                    id={m.id}
                     url={m.audioUrl}
                     duration={m.duration ?? 0}
-                    playing={playingId === m.id}
-                    onPlay={() => setPlayingId(m.id)}
-                    onPause={() => setPlayingId((prev) => (prev === m.id ? null : prev))}
                     avatarUrl={channel.avatarUrl}
                     avatarName={channel.name}
                     createdAt={m.createdAt}
+                    sourceKey={`channel:${channel.id}`}
                     withMenu={!isOwner && !isPreview}
                     linkText={m.text}
                     reactions={m.reactions}

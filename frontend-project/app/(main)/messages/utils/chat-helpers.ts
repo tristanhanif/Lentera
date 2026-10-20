@@ -50,6 +50,13 @@ export const voicePreviewLabel = (msg: { audioUrl?: string | null; voiceDuration
   return `🎤 VN ${formatVoiceDuration(msg.voiceDuration)}`;
 };
 
+// Link komunitas hasil tombol Copy link (Format: "/messages?community=<id>")
+// di dalam teks pesan. Dipakai untuk kartu tappable di bubble DM.
+export const extractCommunityId = (text: string): string | null => {
+  const m = /\/messages\?community=([A-Za-z0-9\-_]+)/.exec(text || "");
+  return m?.[1] ?? null;
+};
+
 // Balasan catatan: cek kedaluwarsa dari snapshot noteExpiresAt.
 export const isNoteReplyExpired = (msg: ChatMessage) => {
   if (!msg.noteId) return false;

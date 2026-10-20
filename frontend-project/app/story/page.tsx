@@ -11,13 +11,13 @@ import {
   Camera,
   Image as ImageIcon,
   Copy,
-  Plus,
   Trash2,
-  Send,
   Check,
   Music,
   Smile,
   Type,
+  Star,
+  Globe,
 } from "lucide-react";
 import { api } from "@/app/lib/axios";
 import { useGetPostById } from "@/app/(main)/post/post.service";
@@ -983,7 +983,10 @@ function StoryPageInner() {
     !recording &&
     (layout === 1 ? filledCount === 1 : filledCount === layout);
 
-  const handleSubmit = async () => {
+  // aud diambil dari parameter supaya klik kotak audiens langsung kirim
+  // pakai nilai yang dipencet (hindari state basi satu frame).
+  const handleSubmit = async (aud?: "public" | "close") => {
+    const chosenAudience = aud ?? audience;
     if (!canSubmit) {
       showHint(
         layout === 1 ? "Ambil foto/video dulu" : `Isi semua ${layout} kotak dulu`,
@@ -1023,7 +1026,7 @@ function StoryPageInner() {
       await api.post("/stories", {
         type: isVideo ? "video" : "photo",
         layout: layoutToBackend(layout),
-        audience,
+        audience: chosenAudience,
         ...(music?.previewUrl
           ? {
               music: {
@@ -1076,6 +1079,15 @@ function StoryPageInner() {
       setSubmitting(false);
     }
   };
+
+  // Index kotak terakhir yang terisi (untuk letak buletan sampah merah
+  // per-kotak di layout multi: hanya kotak terakhir yang punya tombol hapus).
+  const lastFilledIdx = (() => {
+    for (let i = cells.length - 1; i >= 0; i--) {
+      if (cells[i]) return i;
+    }
+    return -1;
+  })();
 
   // ---------- render grid ----------
   const renderCell = (idx: number) => {
@@ -1195,30 +1207,48 @@ function StoryPageInner() {
           </Flex>
         )}
 
-        {cell && isActive && !submitting && (
-          <Box position="absolute" top={2} right={2}>
-            <IconButton
-              aria-label="Hapus"
-              size="xs"
-              borderRadius="full"
-              bg="blackAlpha.600"
-              color="white"
-              _hover={{ bg: "blackAlpha.800" }}
-              onClick={(e) => {
-                e.stopPropagation();
-                clearCell(idx);
-              }}
-            >
-              <Trash2 size={12} />
-            </IconButton>
-          </Box>
-        )}
+            {/* Hapus kotak kecil per-cell: hanya di KOTAK GAMBAR TERAKHIR
+                (terisi) — layout multi. Pencet sampah = kotak paling
+                belakang yang kehapus, satu-satu, bukan semua sekaligus.
+                Layout 1 memakai buletan sampah merah di baris alat atas. */}
+            {cell && layout !== 1 && !submitting && idx === lastFilledIdx && (
+              <Box
+                as="button"
+                aria-label={`Hapus gambar ${idx + 1}`}
+                title="Hapus gambar"
+                position="absolute"
+                top="8px"
+                right="8px"
+                zIndex={2}
+                w="30px"
+                h="30px"
+                borderRadius="full"
+                bg="red.500"
+                border="1.5px solid"
+                borderColor="whiteAlpha.700"
+                display="flex"
+                alignItems="center"
+                justifyContent="center"
+                color="white"
+                cursor="pointer"
+                backdropFilter="blur(8px)"
+                _hover={{ bg: "red.600" }}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  clearCell(idx);
+                }}
+              >
+                <Trash2 size={14} />
+              </Box>
+            )}
       </Box>
     );
   };
 
   // Alat persiapan story: deret horizontal kanan atas —
-  // musik (abu) | pen/teks (abu) | emoji (abu) | sampah merah (hapus foto aktif).
+  // musik (abu) | pen/teks (abu) | emoji (abu).
+  // Hapus media kini lewat buletan sampah MERAH di kanan bawah kotak
+  // kamera (muncul terus selama tahap hias/persiapan).
   // Kalau sudah pilih lagu, icon musik diganti album cover berputar (hemat tempat,
   // chip judul di kiri atas dihapus).
   const renderDecorateTools = () => (
@@ -1343,28 +1373,31 @@ function StoryPageInner() {
             <Icon size={18} />
           </Box>
         ))}
-        {/* Sampah merah: hapus foto/video aktif */}
-        <Box
-          as="button"
-          aria-label="Hapus foto"
-          title="Hapus foto"
-          onClick={() => clearCell(activeCell)}
-          w="40px"
-          h="40px"
-          borderRadius="full"
-          bg="red.500"
-          border="1.5px solid"
-          borderColor="whiteAlpha.700"
-          display="flex"
-          alignItems="center"
-          justifyContent="center"
-          color="white"
-          cursor="pointer"
-          backdropFilter="blur(8px)"
-          _hover={{ bg: "red.600" }}
-        >
-          <Trash2 size={18} />
-        </Box>
+        {/* Sampah merah paling kanan: hanya untuk layout 1 & mode
+            bagikan postingan — layout multi pakai sampah merah per-kotak. */}
+        {(layout === 1 || postShare) && (
+          <Box
+            as="button"
+            aria-label="Hapus foto/video"
+            title="Hapus foto/video"
+            onClick={() => clearCell(activeCell)}
+            w="40px"
+            h="40px"
+            borderRadius="full"
+            bg="red.500"
+            border="1.5px solid"
+            borderColor="whiteAlpha.700"
+            display="flex"
+            alignItems="center"
+            justifyContent="center"
+            color="white"
+            cursor="pointer"
+            backdropFilter="blur(8px)"
+            _hover={{ bg: "red.600" }}
+          >
+            <Trash2 size={18} />
+          </Box>
+        )}
       </Box>
     </Box>
   );
@@ -2067,6 +2100,35 @@ function StoryPageInner() {
             `}</style>
             {postShare ? renderPostShareCanvas() : renderGrid()}
             {renderPostShareGate()}
+            {/* Tahap preview galeri layout 1 (sebelum centang): buletan
+                MERAH sampah di kanan atas — hapus media dari galeri lalu
+                kembali ke tahap awal (motret / galeri / rekam).
+                Layout multi pakai sampah merah per-kotak di renderCell. */}
+            {!decorate && pendingCheck && layout === 1 && (
+              <Box position="absolute" top="10px" right="10px" zIndex={3}>
+                <Box
+                  as="button"
+                  aria-label="Hapus media"
+                  title="Hapus media"
+                  onClick={() => clearCell(activeCell)}
+                  w="40px"
+                  h="40px"
+                  borderRadius="full"
+                  bg="red.500"
+                  border="1.5px solid"
+                  borderColor="whiteAlpha.700"
+                  display="flex"
+                  alignItems="center"
+                  justifyContent="center"
+                  color="white"
+                  cursor="pointer"
+                  backdropFilter="blur(8px)"
+                  _hover={{ bg: "red.600" }}
+                >
+                  <Trash2 size={18} />
+                </Box>
+              </Box>
+            )}
             {/* Kiri tengah DI DALAM kotak kamera: layout picker */}
             {!postShare && !decorate && !pendingCheck && (
               <Box
@@ -2104,14 +2166,16 @@ function StoryPageInner() {
             {decorate && renderDecorateTools()}
             {(decorate || pendingCheck) && renderMusicSticker()}
             {(decorate || pendingCheck) && renderTextSticker()}
-            {/* Pilihan audiens DI DALAM kotak kamera (tahap persiapan):
-                kiri biru-putih (teman dekat), kanan putih-hitam (publik). */}
-            {(decorate || pendingCheck) && (
+            {/* Pilihan audiens DI PALING BAWAH kotak kamera (tahap hias,
+                setelah centang): kiri biru bintang (teman terdekat), kanan
+                putih globe (publik). Mencet kotak = langsung memproses &
+                mengirim story. Ada efek hover/tekan biar menarik. */}
+            {decorate && !submitting && (
               <Flex
                 position="absolute"
-                bottom="100px"
-                left="12px"
-                right="12px"
+                bottom="12px"
+                left="16px"
+                right="16px"
                 zIndex={3}
                 gap={2}
                 justify="center"
@@ -2119,47 +2183,73 @@ function StoryPageInner() {
                 <Box
                   as="button"
                   flex={1}
-                  maxW="220px"
+                  flexBasis={0}
+                  minW={0}
                   borderRadius="xl"
                   px={2}
-                  py={2}
-                  bg="blue.500"
+                  py={2.5}
+                  bg="linear-gradient(135deg, #3b82f6, #6366f1)"
                   color="white"
-                  border="2px solid"
-                  borderColor={audience === "close" ? "white" : "transparent"}
-                  boxShadow={audience === "close" ? "0 0 0 1px rgba(255,255,255,0.6)" : "none"}
                   fontSize="xs"
                   fontWeight="bold"
                   textAlign="center"
                   lineHeight="1.3"
                   cursor="pointer"
-                  _hover={{ bg: "blue.600" }}
-                  onClick={() => setAudience("close")}
-                  title="Kirim hanya ke teman terdekat"
+                  display="flex"
+                  alignItems="center"
+                  justifyContent="center"
+                  gap={1.5}
+                  boxShadow="0 4px 16px rgba(59, 130, 246, 0.45)"
+                  transition="transform 0.15s ease, box-shadow 0.15s ease, filter 0.15s ease"
+                  _hover={{
+                    transform: "translateY(-2px) scale(1.02)",
+                    boxShadow: "0 6px 22px rgba(59, 130, 246, 0.65)",
+                    filter: "brightness(1.08)",
+                  }}
+                  _active={{ transform: "scale(0.95)", boxShadow: "0 2px 8px rgba(59, 130, 246, 0.5)" }}
+                  onClick={() => {
+                    setAudience("close");
+                    handleSubmit("close");
+                  }}
+                  title="Hanya kirim ke teman terdekat"
                 >
-                  Kirim hanya ke teman terdekat
+                  <Star size={14} fill="#facc15" color="#facc15" style={{ flexShrink: 0 }} />
+                  Hanya kirim ke teman terdekat
                 </Box>
                 <Box
                   as="button"
                   flex={1}
-                  maxW="220px"
+                  flexBasis={0}
+                  minW={0}
                   borderRadius="xl"
                   px={2}
-                  py={2}
+                  py={2.5}
                   bg="white"
                   color="black"
-                  border="2px solid"
-                  borderColor={audience === "public" ? "white" : "transparent"}
-                  boxShadow={audience === "public" ? "0 0 0 1px rgba(255,255,255,0.6)" : "none"}
                   fontSize="xs"
                   fontWeight="bold"
                   textAlign="center"
                   lineHeight="1.3"
                   cursor="pointer"
-                  _hover={{ bg: "gray.100" }}
-                  onClick={() => setAudience("public")}
+                  display="flex"
+                  alignItems="center"
+                  justifyContent="center"
+                  gap={1.5}
+                  boxShadow="0 4px 16px rgba(0, 0, 0, 0.35)"
+                  transition="transform 0.15s ease, box-shadow 0.15s ease, filter 0.15s ease"
+                  _hover={{
+                    transform: "translateY(-2px) scale(1.02)",
+                    boxShadow: "0 6px 22px rgba(0, 0, 0, 0.5)",
+                    filter: "brightness(1.05)",
+                  }}
+                  _active={{ transform: "scale(0.95)", boxShadow: "0 2px 8px rgba(0, 0, 0, 0.4)" }}
+                  onClick={() => {
+                    setAudience("public");
+                    handleSubmit("public");
+                  }}
                   title="Kirim ke publik"
                 >
+                  <Globe size={14} color="#2563eb" style={{ flexShrink: 0 }} />
                   Kirim ke publik
                 </Box>
               </Flex>
@@ -2196,8 +2286,10 @@ function StoryPageInner() {
               </Box>
             )}
             {/* Kontrol bawah DI DALAM kotak kamera:
-                kiri galeri, tengah shutter/centang, kanan kirim (hanya bila sudah ada media) */}
-            {!postShare ? (
+                tengah shutter/centang, kanan sampah merah (hapus media aktif).
+                Galeri & ikon kirim orange di bawah sudah dihapus — kirim
+                lewat kotak "Hanya kirim ke teman terdekat" / "Kirim ke publik". */}
+            {!postShare && !decorate && (
               <Flex
                 position="absolute"
                 bottom="12px"
@@ -2207,44 +2299,8 @@ function StoryPageInner() {
                 align="flex-end"
                 justify="space-between"
               >
-                {/* Bawah kiri dalam: galeri + buletan biru plus */}
-                <Box
-                  as="button"
-                  aria-label="Upload gambar"
-                  onClick={openGallery}
-                  position="relative"
-                  w="52px"
-                  h="52px"
-                  borderRadius="lg"
-                  overflow="visible"
-                  bg="blackAlpha.600"
-                  border="1px solid"
-                  borderColor="whiteAlpha.400"
-                  display="flex"
-                  alignItems="center"
-                  justifyContent="center"
-                  cursor="pointer"
-                  backdropFilter="blur(8px)"
-                  _hover={{ bg: "blackAlpha.800" }}
-                  flexShrink={0}
-                >
-                  <ImageIcon size={22} color="white" />
-                  <Box
-                    position="absolute"
-                    bottom="-8px"
-                    right="-8px"
-                    w="24px"
-                    h="24px"
-                    borderRadius="full"
-                    bg="blue.500"
-                    border="2px solid black"
-                    display="flex"
-                    alignItems="center"
-                    justifyContent="center"
-                  >
-                    <Plus size={14} color="white" />
-                  </Box>
-                </Box>
+                {/* Kiri dalam: spacer menyeimbangkan shutter di tengah */}
+                <Box w="52px" h="52px" flexShrink={0} />
 
                 {/* Tengah dalam: shutter / centang (tanpa tulisan hint) */}
                 {!decorate && (
@@ -2317,47 +2373,10 @@ function StoryPageInner() {
                   </Box>
                 )}
 
-                {/* Kanan dalam: kirim — hanya tampil bila sudah ada foto/video (orange) */}
-                {canSubmit ? (
-                  <IconButton
-                    aria-label="Bagikan story"
-                    borderRadius="full"
-                    w="52px"
-                    h="52px"
-                    bg="orange.500"
-                    color="white"
-                    _hover={{ bg: "orange.600" }}
-                    loading={submitting}
-                    onClick={handleSubmit}
-                    flexShrink={0}
-                  >
-                    <Send size={20} />
-                  </IconButton>
-                ) : (
-                  <Box w="52px" h="52px" flexShrink={0} />
-                )}
+                {/* Kanan dalam: spacer menyeimbangkan shutter di tengah —
+                    hapus media kini lewat buletan sampah merah di baris alat atas */}
+                <Box w="52px" h="52px" flexShrink={0} />
               </Flex>
-            ) : (
-              <>
-                {/* Mode bagikan postingan: hanya tombol kirim di kanan bawah dalam */}
-                {canSubmit && (
-                  <Box position="absolute" bottom="12px" right="12px" zIndex={3}>
-                    <IconButton
-                      aria-label="Bagikan story"
-                      borderRadius="full"
-                      w="52px"
-                      h="52px"
-                      bg="orange.500"
-                      color="white"
-                      _hover={{ bg: "orange.600" }}
-                      loading={submitting}
-                      onClick={handleSubmit}
-                    >
-                      <Send size={20} />
-                    </IconButton>
-                  </Box>
-                )}
-              </>
             )}
           </Box>
 

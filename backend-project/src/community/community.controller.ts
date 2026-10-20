@@ -54,6 +54,17 @@ export class CommunityController {
     return { message: 'OK', data };
   }
 
+  // Info publik komunitas (tidak perlu jadi anggota): untuk tombol Copy link
+  // yang dibagikan lewat chat — non-anggota dapat lihat preview + isMember.
+  @Get(':id/preview')
+  async preview(@Param('id') id: string) {
+    const data = await this.communityService.previewCommunity(
+      this.req.user.sub,
+      id,
+    );
+    return { message: 'OK', data };
+  }
+
   @Get(':id')
   async detail(@Param('id') id: string) {
     const data = await this.communityService.getCommunity(
