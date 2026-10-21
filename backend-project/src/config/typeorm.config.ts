@@ -31,6 +31,9 @@ export const typeOrmConfig: TypeOrmModuleOptions = {
   // lalu dikirim ke frontend sebagai 19:21Z kemarin → tampil tetap 02.21.
   // 'Z' = baca/tulis selalu sebagai UTC, frontend tinggal konversi ke Asia/Jakarta.
   timezone: 'Z',
+  // Aiven/host DB terkelola wajib TLS (ssl-mode=REQUIRED).
+  // Aktif dengan DB_SSL=true; dev lokal membiarkan DB_SSL kosong (tanpa TLS).
+  ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: false } : undefined,
   entities: [User, PasswordResetToken, Posts, Media, Likes, Comments, CommentLike, Notification, Follow, Conversation, Message, Reposts, SavedPost, Story, StoryMedia, StoryView, StoryLike, Note, LoginSession, UserBlock, CloseFriend, Community, CommunityMember, CommunityMessage, Channel, ChannelFollow, ChannelMessage, ChannelMessageReaction],
   synchronize: true,
   // logging: true,

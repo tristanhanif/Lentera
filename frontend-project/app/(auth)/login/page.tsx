@@ -64,7 +64,7 @@ function LoginPage() {
   const handleGoogleLogin = () => {
     const rootUrl = "https://accounts.google.com/o/oauth2/v2/auth";
     const options = {
-      redirect_uri: process.env.NEXT_PUBLIC_REDIRECT_URL_GOOGLE!,
+      redirect_uri: `${window.location.origin}/api/auth/google/callback`,
       client_id: process.env.NEXT_PUBLIC_CLIENT_ID!,
       access_type: "offline",
       response_type: "code",

@@ -12,7 +12,7 @@ import { Notification } from '../app/entity/notification.entity';
 
 @WebSocketGateway({
   cors: {
-    origin: ['http://localhost:3000'],
+    origin: ['http://localhost:3000', 'https://lentera-snowy.vercel.app'],
     credentials: true,
   },
   namespace: '/notification',

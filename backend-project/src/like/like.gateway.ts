@@ -8,7 +8,11 @@ import { Server, Socket } from 'socket.io';
 
 @WebSocketGateway({
   cors: {
-    origin: ['http://localhost:3000', 'http://localhost:6700'],
+    origin: [
+      'http://localhost:3000',
+      'http://localhost:6700',
+      'https://lentera-snowy.vercel.app',
+    ],
     credentials: true,
   },
   namespace: '/like',

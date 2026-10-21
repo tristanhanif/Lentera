@@ -2,6 +2,15 @@ import { NextResponse } from "next/server";
 import axios from "axios";
 import { api } from "@/app/lib/axios";
 
+function getOrigin(request: Request): string {
+  const host =
+    request.headers.get("x-forwarded-host") ?? request.headers.get("host");
+  if (!host) return new URL(request.url).origin;
+  const proto =
+    request.headers.get("x-forwarded-proto")?.split(",")[0] ?? "http";
+  return `${proto}://${host}`;
+}
+
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const code = searchParams.get("code");
@@ -17,8 +26,8 @@ export async function GET(request: Request) {
       {
         code,
         client_id: process.env.NEXT_PUBLIC_CLIENT_ID,
-        client_secret: process.env.NEXT_PUBLIC_CLIENT_SECRET,
-        redirect_uri: process.env.NEXT_PUBLIC_REDIRECT_URL_GOOGLE,
+        client_secret: process.env.CLIENT_SECRET,
+        redirect_uri: `${getOrigin(request)}/api/auth/google/callback`,
         grant_type: "authorization_code",
       },
     );
